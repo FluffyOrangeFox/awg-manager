@@ -251,6 +251,54 @@ func TestReconcileInstalled_V6Off_FirstTickSweepsTracelessOrphan(t *testing.T) {
 	}
 }
 
+// Пока движок не готов, netfilterStateKnown остаётся false и force приходит
+// каждый тик — часами. Безусловный снос обязан быть разовым за процесс, иначе
+// горячий путь "ipv4_only" гонял бы ip6tables, ip и ipset на каждом тике.
+func TestReconcileInstalled_V6Off_EngineDownSweepsOnce(t *testing.T) {
+	svc := newReconcileInstalledService(t, newTestSingbox(t)) // мёртв
+	svc.netfilterStateKnown = false
+	fe := &v6Exec{}
+	svc.deps.IPTables = newV6IPTables(fe)
+	env := stubV6Env(t)
+	sr := reconcileInstalledSettings
+	sr.InterceptFamily = FamilyIPv4Only
+
+	mustReconcile(t, svc, sr)
+	mustReconcile(t, svc, sr)
+	mustReconcile(t, svc, sr)
+	if fe.cleanups != 1 || env.setDropped != 1 {
+		t.Errorf("снос обязан быть разовым: cleanups=%d dropped=%d", fe.cleanups, env.setDropped)
+	}
+}
+
+// То же для ветки «перехват включён, но на LAN нет IPv6»: сирота прежней
+// установки снимается на первой сверке и без следов.
+func TestReconcileInstalled_V6NoBridges_FirstTickSweepsTracelessOrphan(t *testing.T) {
+	svc, fe, env, sr := newV6ReconcileService(t, FamilyBoth)
+	svc.netfilterStateKnown = false
+	env.topo = v6Topology{}
+	fe.dump = v6JumpsDump()
+	mustReconcile(t, svc, sr)
+	if fe.cleanups != 1 || !hasCall(fe.ip6t, "-t", "mangle", "-X", Chain6Name) {
+		t.Errorf("сирота обязана быть снесена: cleanups=%d calls=%v", fe.cleanups, fe.ip6t)
+	}
+}
+
+// Снос без следов на старте — у всех с "ipv4_only" на каждом старте демона:
+// сообщение «правила сняты» о том, чего не было, — ложь в журнале.
+func TestReconcileInstalled_V6Off_TracelessSweepNotLogged(t *testing.T) {
+	svc, _, _, sr := newV6ReconcileService(t, FamilyIPv4Only)
+	svc.netfilterStateKnown = false
+	rec := &recordingAppLogger{}
+	svc.appLog = logging.NewScopedLogger(rec, logging.GroupRouting, logging.SubSingboxRouter)
+	mustReconcile(t, svc, sr)
+	for _, e := range rec.entries {
+		if strings.Contains(e, "сняты") {
+			t.Errorf("снос без следов не должен сообщать о снятии правил: %q", e)
+		}
+	}
+}
+
 // Топологию снять не удалось — это «не знаю», а не «IPv6 пропал»: рабочие
 // правила трогать нельзя.
 func TestReconcileInstalled_V6TopologyError_LeavesLayerAlone(t *testing.T) {
@@ -1151,6 +1199,34 @@ func TestRunBypassPopulate_V6SettingsReadError_Logged(t *testing.T) {
 
 	if !strings.Contains(strings.Join(rec.entries, "\n"), "is a directory") {
 		t.Errorf("ошибка чтения настроек не попала в журнал: %v", rec.entries)
+	}
+}
+
+// Настройки прочитались до наполнения и не перечитались после: набор, только
+// что наполненный по включённому перехвату, не сносится вслепую, а причина —
+// в журнале.
+func TestRunBypassPopulate_V6SettingsRereadError_KeepsSetAndLogs(t *testing.T) {
+	env := stubV6Env(t)
+	rec := &recordingAppLogger{}
+	svc := newTestService(t, Deps{AppLog: rec, Settings: newTestSettingsStore(t, storage.SingboxRouterSettings{InterceptFamily: FamilyBoth})})
+	svc.appLog = logging.NewScopedLogger(rec, logging.GroupRouting, logging.SubSingboxRouter)
+	broken := t.TempDir()
+	if err := os.Mkdir(filepath.Join(broken, "settings.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	svc.populateBypassSet = func(context.Context, []string) (bypassset.PopulateResult, error) {
+		// Пока шло наполнение, хранилище перестало читаться.
+		svc.deps.Settings = storage.NewSettingsStore(broken)
+		return bypassset.PopulateResult{}, nil
+	}
+
+	svc.runBypassPopulate([]string{"ru"})
+
+	if env.setDropped != 0 {
+		t.Errorf("набор не должен сноситься по нечитаемым настройкам: dropped=%d", env.setDropped)
+	}
+	if !strings.Contains(strings.Join(rec.entries, "\n"), "не перечитаны") {
+		t.Errorf("ошибка повторного чтения настроек не попала в журнал: %v", rec.entries)
 	}
 }
 

@@ -172,12 +172,18 @@ func (s *ServiceImpl) runBypassPopulate(tags []string) {
 	// То же для IPv6-набора: пока шло наполнение, перехват IPv6 могли
 	// выключить — слой уже снял правила и снёс набор, а наш swap его воскресил.
 	// Настройки не прочитались — набор не трогаем, как v4 выше.
-	if still, wErr := s.bypassSet6Wanted(); v6 && wErr == nil && !still {
-		if derr := dropBypassSet6(context.Background()); derr != nil {
-			s.appLog.Warn("ipv6", "", "geoip-обход IPv6: снос набора: "+derr.Error())
+	if v6 {
+		still, wErr := s.bypassSet6Wanted()
+		switch {
+		case wErr != nil:
+			s.appLog.Warn("ipv6", "", "geoip-обход IPv6: настройки не перечитаны, набор оставлен: "+wErr.Error())
+		case !still:
+			if derr := dropBypassSet6(context.Background()); derr != nil {
+				s.appLog.Warn("ipv6", "", "geoip-обход IPv6: снос набора: "+derr.Error())
+			}
+			// Набора быть не должно — и его итог устарел вместе с ним.
+			res.EntryCount6, res.Count6OK, res.Err6 = 0, false, nil
 		}
-		// Набора быть не должно — и его итог устарел вместе с ним.
-		res.EntryCount6, res.Count6OK, res.Err6 = 0, false, nil
 	}
 	s.storeBypassSetOutcome(res, err)
 }

@@ -254,6 +254,8 @@ describe('Исключения по подсетям: IPv6 только при �
 		render(StatusDrawer);
 		await typeSubnet('2001:db8::/48');
 		expect(patchSpy).not.toHaveBeenCalled();
+		// Отказ, а не потерянный ввод: поле объясняет причину.
+		expect(screen.queryByText(/IPv6-адреса действуют только при включённом перехвате IPv6/)).not.toBeNull();
 	});
 
 	it('оставшаяся IPv6-подсеть при выключенном перехвате видна и помечена недействующей', () => {

@@ -297,14 +297,19 @@ func (s *ServiceImpl) syncV6(ctx context.Context, want V6Spec, state v6WantState
 	if state == v6Unknown {
 		return
 	}
+	// Безусловный снос сироты — один раз за процесс: force держится, пока
+	// netfilterStateKnown=false, а при неготовом движке это каждый тик часами.
+	sweep := force && !s.v6StartSwept
 	if state == v6Off {
-		s.teardownV6(ctx, "перехват IPv6 выключен в настройках — правила сняты", force)
+		s.teardownV6(ctx, "перехват IPv6 выключен в настройках — правила сняты", sweep)
+		s.v6StartSwept = true
 		s.v6Clear()
 		return
 	}
 	if !v6HasJumps(want) {
 		// IPv6 на LAN не поднят (или метки нет): ставить нечего.
-		s.teardownV6(ctx, "на LAN-мостах пропал IPv6 — правила перехвата сняты", force)
+		s.teardownV6(ctx, "на LAN-мостах пропал IPv6 — правила перехвата сняты", sweep)
+		s.v6StartSwept = true
 		s.v6Warn("перехват IPv6 включён, но ни на одном LAN-мосту нет IPv6 — правила не ставятся")
 		return
 	}
