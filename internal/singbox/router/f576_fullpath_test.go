@@ -297,10 +297,10 @@ func TestF576_PolicyTunReenableReusesHeldRecord(t *testing.T) {
 	o.f.ExpectCreate("OpkgTun0")
 	ctx := context.Background()
 
-	if err := h.svc.Enable(ctx); err != nil {
+	if err := h.svc.enable(ctx); err != nil {
 		t.Fatalf("Enable #1: %v", err)
 	}
-	if err := h.svc.Disable(ctx); err != nil {
+	if err := h.svc.disable(ctx); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
 	if !o.f.Has("OpkgTun0") {
@@ -313,7 +313,7 @@ func TestF576_PolicyTunReenableReusesHeldRecord(t *testing.T) {
 	starts, reloads := sb.startCalls, sb.reloadCalls
 	mark := len(o.f.Posts)
 
-	if err := h.svc.Enable(ctx); err != nil {
+	if err := h.svc.enable(ctx); err != nil {
 		t.Fatalf("Enable #2: %v", err)
 	}
 	level := false
@@ -349,15 +349,15 @@ func TestF576_PolicyTunReenableRenamesHeldRecord(t *testing.T) {
 	o.f.ExpectCreate("OpkgTun0")
 	ctx := context.Background()
 
-	if err := h.svc.Enable(ctx); err != nil {
+	if err := h.svc.enable(ctx); err != nil {
 		t.Fatalf("Enable #1: %v", err)
 	}
-	if err := h.svc.Disable(ctx); err != nil {
+	if err := h.svc.disable(ctx); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
 	setPolicyTunDescription(t, h.store, "Awgmanager")
 
-	if err := h.svc.Enable(ctx); err != nil {
+	if err := h.svc.enable(ctx); err != nil {
 		t.Fatalf("Enable #2: %v", err)
 	}
 	if len(o.f.Created) != 1 {
@@ -381,7 +381,7 @@ func TestF576_PolicyTunExternalRemovalMovesIndex(t *testing.T) {
 	o.f.ExpectCreate("OpkgTun0", "OpkgTun1")
 	ctx := context.Background()
 
-	if err := h.svc.Enable(ctx); err != nil {
+	if err := h.svc.enable(ctx); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	sr := setRouterEnabled(t, h)
@@ -413,7 +413,7 @@ func TestF576_PolicyTunInboundHealReusesRecord(t *testing.T) {
 	o.f.ExpectCreate("OpkgTun0")
 	ctx := context.Background()
 
-	if err := h.svc.Enable(ctx); err != nil {
+	if err := h.svc.enable(ctx); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	sr := setRouterEnabled(t, h)
@@ -478,17 +478,17 @@ func TestF576_FakeIPReenableRecreates(t *testing.T) {
 	o.f.ExpectCreate("OpkgTun0")
 	ctx := context.Background()
 
-	if err := h.svc.Enable(ctx); err != nil {
+	if err := h.svc.enable(ctx); err != nil {
 		t.Fatalf("Enable #1: %v", err)
 	}
-	if err := h.svc.Disable(ctx); err != nil {
+	if err := h.svc.disable(ctx); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
 	if o.f.Has("OpkgTun0") {
 		t.Fatal("выключение fakeip запись сносит")
 	}
 	o.f.ExpectCreate("OpkgTun0") // повторное создание того же имени — намеренное
-	if err := h.svc.Enable(ctx); err != nil {
+	if err := h.svc.enable(ctx); err != nil {
 		t.Fatalf("Enable #2: %v", err)
 	}
 	if len(o.f.Created) != 2 {

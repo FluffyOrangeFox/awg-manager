@@ -16,7 +16,7 @@ import (
 // UP the new one, with directional fail-closed rollback and per-step progress
 // events for the UI. The old UpdateSettings→Reconcile path dispatches by the NEW
 // mode and never disables the OLD mode's resources — SwitchRoutingMode closes
-// that by COMPOSING the existing Enable/Disable (it does not reimplement them).
+// that by COMPOSING the existing enable/disable (it does not reimplement them).
 // ---------------------------------------------------------------------------
 
 // transitionEventType is the bus event the UI progress screen subscribes to.
@@ -111,14 +111,14 @@ func (s *ServiceImpl) currentState() (string, error) {
 // fail-closed rollback (FE-spec §7.4) and progress events. target ∈
 // {"off","tproxy","fakeip-tun","policy-tun"}.
 //
-// It COMPOSES the existing Enable/Disable: the teardown calls Disable while the
-// OLD mode is still persisted (Disable dispatches by the persisted mode), then
-// flips RoutingMode/Enabled and calls Enable (which dispatches by the new mode).
-// Directional rollback restores a consistent state on Enable failure, and is
+// It COMPOSES the existing enable/disable: the teardown calls disable while the
+// OLD mode is still persisted (disable dispatches by the persisted mode), then
+// flips RoutingMode/Enabled and calls enable (which dispatches by the new mode).
+// Directional rollback restores a consistent state on enable failure, and is
 // fail-closed: if rollback itself fails the router is left OFF, never
 // half-assembled. finalState in every emitted event reflects reality.
 //
-// Concurrency: serialized by transitionMu (NOT s.mu — Enable/Disable take s.mu).
+// Concurrency: serialized by transitionMu (NOT s.mu — enable/disable take s.mu).
 func (s *ServiceImpl) SwitchRoutingMode(ctx context.Context, target string) error {
 	if !validTransitionTarget(target) {
 		return fmt.Errorf("invalid routing mode %q (want off|tproxy|fakeip-tun|policy-tun)", target)
@@ -175,7 +175,7 @@ func (s *ServiceImpl) SwitchRoutingMode(ctx context.Context, target string) erro
 	if source != stateOff {
 		s.emitTransition(id, source, target,
 			TransitionStep{Step: "teardown", Status: "current"}, false, "", "")
-		if err := s.Disable(ctx); err != nil {
+		if err := s.disable(ctx); err != nil {
 			// Teardown failed: the old mode may be partially down. Surface with
 			// the failing step + a best-effort finalState. We do NOT proceed to
 			// bring up the target on top of a failed teardown.
@@ -221,7 +221,7 @@ func (s *ServiceImpl) SwitchRoutingMode(ctx context.Context, target string) erro
 			TransitionStep{Step: "provision", Status: "current"}, false, "", "")
 	}
 
-	if enableErr := s.Enable(ctx); enableErr != nil {
+	if enableErr := s.enable(ctx); enableErr != nil {
 		failStep := "provision"
 		if target == stateTProxy {
 			failStep = "readiness"
@@ -284,7 +284,7 @@ func (s *ServiceImpl) rollbackSwitch(ctx context.Context, id, source, target str
 			return s.failClosed(id, source, target, enableErr,
 				fmt.Errorf("rollback persist %s: %w", source, perr))
 		}
-		if rerr := s.Enable(ctx); rerr != nil {
+		if rerr := s.enable(ctx); rerr != nil {
 			// Restoring the source also failed → fail closed to OFF.
 			return s.failClosed(id, source, target, enableErr,
 				fmt.Errorf("rollback re-enable %s: %w", source, rerr))

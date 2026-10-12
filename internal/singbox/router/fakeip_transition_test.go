@@ -240,7 +240,7 @@ func TestSwitch_FakeIPToTproxy(t *testing.T) {
 	h := newTransitionHarness(t)
 	h.seedState(t, stateFakeIPTun, true)
 	// Provision fakeip first so the teardown has real persist to drain.
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("seed Enable(fakeip): %v", err)
 	}
 	stop := h.subscribe(t)
@@ -261,7 +261,7 @@ func TestSwitch_FakeIPToTproxy(t *testing.T) {
 func TestSwitch_FakeIPToOff(t *testing.T) {
 	h := newTransitionHarness(t)
 	h.seedState(t, stateFakeIPTun, true)
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("seed Enable(fakeip): %v", err)
 	}
 	// fakeip persist must exist before teardown.
@@ -346,7 +346,7 @@ func TestSwitch_RollbackOffToFakeIP(t *testing.T) {
 func TestSwitch_RollbackFakeIPToTproxy(t *testing.T) {
 	h := newTransitionHarness(t)
 	h.seedState(t, stateFakeIPTun, true)
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("seed Enable(fakeip): %v", err)
 	}
 	// Make the tproxy Enable fail (WAN collector error after teardown).
@@ -483,7 +483,7 @@ func TestSwitch_RollbackPolicyTunToFakeIP(t *testing.T) {
 func TestSwitch_RollbackFakeIPToPolicyTun(t *testing.T) {
 	h := newTransitionHarness(t)
 	h.seedState(t, stateFakeIPTun, true)
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("seed Enable(fakeip): %v", err)
 	}
 	h.failNextEnable(t)

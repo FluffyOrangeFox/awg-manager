@@ -545,7 +545,7 @@ func (c *RouterConfig) EnsureSystemRules(snifferEnabled bool) {
 //     Same upstream validator enforces non-emptiness; this method does
 //     not second-guess the caller.
 //
-// Called from Enable() after EnsureSystemRules. Re-running with the same
+// Called from enable() after EnsureSystemRules. Re-running with the same
 // arguments is a no-op idempotent update.
 func (c *RouterConfig) EnsureRouteWAN(autoDetect bool, kernelName string) {
 	if autoDetect {

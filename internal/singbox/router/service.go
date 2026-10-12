@@ -484,7 +484,7 @@ type ServiceImpl struct {
 	bypassLog *logging.ScopedLogger
 	mu        sync.Mutex
 	// transitionMu serializes SwitchRoutingMode calls. It is DISTINCT from mu:
-	// Enable/Disable (which SwitchRoutingMode composes) take mu themselves, so
+	// enable/disable (which SwitchRoutingMode composes) take mu themselves, so
 	// holding mu across the whole switch would self-deadlock.
 	transitionMu sync.Mutex
 	// transitionReadinessProgress emits readiness heartbeats during
@@ -496,7 +496,7 @@ type ServiceImpl struct {
 	// currentBypassGeoIPTags описывают то, что РЕАЛЬНО установлено в netfilter.
 	//
 	// ИНВАРИАНТ: взаимное исключение даёт transitionMu, и только он.
-	// Писатели: enableLocked, Disable, enablePolicyTun, disablePolicyTun,
+	// Писатели: enableLocked, disable, enablePolicyTun, disablePolicyTun,
 	// reconcileInstalled, reconcilePolicyTunQoS. Читатели: reconcileInstalled,
 	// reconcilePolicyTunQoS. Каждый достижим ровно двумя путями — Reconcile
 	// (берёт transitionMu через TryLock) и SwitchRoutingMode (через Lock).
@@ -507,10 +507,11 @@ type ServiceImpl struct {
 	// соседних полей в тех же критических секциях.
 	//
 	// Пока путей два, гонки нет по построению. Третий путь (например новая
-	// публичная ручка, зовущая Enable/Disable мимо transitionMu) её вернёт —
+	// публичная ручка, зовущая enable/disable мимо transitionMu) её вернёт —
 	// раньше такой путь давали ручки POST /singbox/router/{enable,disable},
 	// и они удалены именно поэтому. Новый вызывающий обязан заходить через
-	// Reconcile или SwitchRoutingMode.
+	// Reconcile или SwitchRoutingMode. Снаружи пакета это держит компилятор:
+	// enable/disable не экспортированы (F624); внутри — только этот комментарий.
 	//
 	// appliedSpec — снимок ровно того RestoreInputSpec, что уехал в
 	// IPTables.Install; nil = «ничего нашего в netfilter не установлено».

@@ -26,7 +26,7 @@ const fakeIPPoolRouteComment = "awgm fakeip pool"
 
 // enableFakeIPTun provisions the full fakeip-tun path: persist index → create
 // OpkgTun → addr/mtu/up → write+start sing-box slot → wait readiness →
-// pool routes → persist enabled. Called with s.mu held by Enable. Honors the
+// pool routes → persist enabled. Called with s.mu held by enable. Honors the
 // persist-before-create invariant (the startup reap only sees orphans by
 // persisted index) and rolls back ALL partial work in reverse on any failure so
 // no orphaned iface / stale persist is left behind.

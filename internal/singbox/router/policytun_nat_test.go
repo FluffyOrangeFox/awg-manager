@@ -487,7 +487,7 @@ func TestPolicyTunEnable_SourcePreserveBeforeDefaultRoute(t *testing.T) {
 	h := newPolicyTunEnableHarness(t, "")
 	armSourcePreserve(t, h, []string{"Home"})
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 
@@ -510,7 +510,7 @@ func TestPolicyTunEnable_RollbackRestoresNAT(t *testing.T) {
 	h := newPolicyTunEnableHarness(t, "SetDefaultRoute")
 	armSourcePreserve(t, h, []string{"Home"})
 
-	if err := h.svc.Enable(context.Background()); err == nil {
+	if err := h.svc.enable(context.Background()); err == nil {
 		t.Fatal("Enable with failing SetDefaultRoute: want error, got nil")
 	}
 	if !h.log.has("RemoveStaticNAT:Home:PPPoE0") || !h.log.has("SetSegmentNAT:Home") {
@@ -525,7 +525,7 @@ func TestPolicyTunDisable_RestoresNATFirst(t *testing.T) {
 	armSourcePreserve(t, h, []string{"Home"})
 	provisionPolicyTunForDisable(t, h)
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(policy-tun): %v", err)
 	}
 
@@ -684,7 +684,7 @@ func TestApplyPolicyTunSourcePreserve_KeepsKnownRecord(t *testing.T) {
 func TestPolicyTunEnable_ReprovisionKeepsRecordedNAT(t *testing.T) {
 	h := newPolicyTunEnableHarness(t, "")
 	armSourcePreserve(t, h, []string{"Home"})
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 
@@ -705,7 +705,7 @@ func TestPolicyTunEnable_ReprovisionKeepsRecordedNAT(t *testing.T) {
 	// наш static-NAT.
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
 	h.log.calls = nil
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
 	want2 := []string{"RemoveStaticNAT:Home:PPPoE0", "SetSegmentNAT:Home"}

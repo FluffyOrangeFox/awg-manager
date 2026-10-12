@@ -39,7 +39,7 @@ func (r *recOpkgTunScan) scanned(desc string) bool {
 // allocator and clears the call log so Disable assertions see teardown only.
 func provisionPolicyTunForDisable(t *testing.T, h *policyTunEnableHarness) {
 	t.Helper()
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable (provision for disable): %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
@@ -63,7 +63,7 @@ func TestPolicyTunDisable_TeardownOrder(t *testing.T) {
 	ipt.cleanupHook = func() { h.log.add("Uninstall") }
 	h.svc.deps.IPTables = ipt
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(policy-tun): %v", err)
 	}
 
@@ -118,7 +118,7 @@ func TestPolicyTunDisable_HoldsInterfaceAndIndex(t *testing.T) {
 	if err := h.store.SetOpkgTunState(&storage.OpkgTunState{Mode: storage.OpkgTunModePolicyTun, Index: 3}); err != nil {
 		t.Fatalf("SetOpkgTunState: %v", err)
 	}
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable (provision for disable): %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{3: true}}
@@ -127,7 +127,7 @@ func TestPolicyTunDisable_HoldsInterfaceAndIndex(t *testing.T) {
 	ipt := newStubIPTables(func(context.Context, string) error { return nil })
 	h.svc.deps.IPTables = ipt
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(policy-tun): %v", err)
 	}
 
@@ -152,7 +152,7 @@ func TestPolicyTunDisable_HoldsInterfaceAtIndexZero(t *testing.T) {
 	stubOrphanNetdev(t, true)
 	provisionPolicyTunForDisable(t, h)
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(policy-tun): %v", err)
 	}
 
@@ -187,7 +187,7 @@ func TestPolicyTunDisable_IPv6ClearFailureIsNotFailure(t *testing.T) {
 	provisionPolicyTunForDisable(t, h)
 	h.opkg.failAt = "ClearIPv6Address"
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(policy-tun): %v", err)
 	}
 	if st := h.loadPolicyTun(t); st == nil || st.Provisioned {
@@ -205,7 +205,7 @@ func TestPolicyTunDisable_AddressClearFailureKeepsProvisioned(t *testing.T) {
 	provisionPolicyTunForDisable(t, h)
 	h.opkg.failAt = "ClearAddress"
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(policy-tun): %v", err)
 	}
 	if st := h.loadPolicyTun(t); st == nil || !st.Provisioned {
@@ -228,7 +228,7 @@ func TestPolicyTunDisable_NATSegments(t *testing.T) {
 			t.Fatalf("SetOpkgTunState: %v", err)
 		}
 
-		if err := h.svc.Disable(context.Background()); err != nil {
+		if err := h.svc.disable(context.Background()); err != nil {
 			t.Fatalf("Disable(policy-tun): %v", err)
 		}
 		st := h.loadPolicyTun(t)
@@ -249,7 +249,7 @@ func TestPolicyTunDisable_NATSegments(t *testing.T) {
 			t.Fatalf("SetOpkgTunState: %v", err)
 		}
 
-		if err := h.svc.Disable(context.Background()); err != nil {
+		if err := h.svc.disable(context.Background()); err != nil {
 			t.Fatalf("Disable(policy-tun): %v", err)
 		}
 		st := h.loadPolicyTun(t)
@@ -267,7 +267,7 @@ func TestPolicyTunDisable_ClearFailureStillDisables(t *testing.T) {
 	provisionPolicyTunForDisable(t, h)
 	h.opkg.failAt = "ClearAddress"
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(policy-tun): %v", err)
 	}
 	all, _ := h.store.Load()
@@ -289,7 +289,7 @@ func TestPolicyTunDisable_IdempotentWithoutPersist(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(policy-tun): %v", err)
 	}
 	if len(h.log.calls) != 0 {
@@ -340,7 +340,7 @@ func TestPolicyTunReap_RemovesOrphanInOtherMode(t *testing.T) {
 func TestReconcilePolicyTun_NoopWhenDisabledAndHeld(t *testing.T) {
 	h := newPolicyTunEnableHarness(t, "")
 	provisionPolicyTunForDisable(t, h)
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(policy-tun): %v", err)
 	}
 	h.log.calls = nil
@@ -375,7 +375,7 @@ func TestReconcilePolicyTun_NoopWhenDisabledAndHeld(t *testing.T) {
 // каждые 30 секунд при живом sing-box.
 func TestPolicyTunDisable_ParksSlotWithoutPersist(t *testing.T) {
 	h := newPolicyTunEnableHarness(t, "")
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	// Персист стёрт мимо нас, слот при этом жив.
@@ -386,7 +386,7 @@ func TestPolicyTunDisable_ParksSlotWithoutPersist(t *testing.T) {
 		t.Fatal("предусловие: слот обязан быть активным")
 	}
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(policy-tun): %v", err)
 	}
 	if slotEnabled(t, h.svc, orchestrator.SlotRouter) {
@@ -489,7 +489,7 @@ func TestPolicyTunDisable_RemovesIngress(t *testing.T) {
 	}
 	h.svc.deps.IPTables = ipt
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(policy-tun): %v", err)
 	}
 
@@ -522,7 +522,7 @@ func TestDisablePolicyTunRemovesDNSHookFirst(t *testing.T) {
 	ipt.cleanupPolicyTunDNSHook = func() { h.log.add("RemoveDNSHook") }
 	h.svc.deps.IPTables = ipt
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(policy-tun): %v", err)
 	}
 
@@ -555,7 +555,7 @@ func TestDisablePolicyTunRemovesDNSHookWithoutPersist(t *testing.T) {
 	ipt.cleanupPolicyTunDNSHook = func() { cleared++ }
 	h.svc.deps.IPTables = ipt
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(policy-tun): %v", err)
 	}
 	if cleared == 0 {
@@ -592,7 +592,7 @@ func TestDisablePolicyTun_ResetsAppliedNetfilterState(t *testing.T) {
 	h.svc.appliedBlackhole = &RestoreInputSpec{}
 	h.svc.currentBypassGeoIPTags = []string{"ru"}
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(policy-tun): %v", err)
 	}
 
@@ -621,14 +621,14 @@ func TestPolicyTunDisable_HoldSkipsMutationsWhenIfaceGone(t *testing.T) {
 	if err := h.store.SetOpkgTunState(&storage.OpkgTunState{Mode: storage.OpkgTunModePolicyTun, Index: 3}); err != nil {
 		t.Fatalf("SetOpkgTunState: %v", err)
 	}
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{3: true}}
 	h.log.calls = nil
 	h.svc.deps.IPTables = newStubIPTables(func(context.Context, string) error { return nil })
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
 	for _, call := range []string{"InterfaceDown:OpkgTun3", "ClearAddress:OpkgTun3", "ClearIPv6Address:OpkgTun3"} {
@@ -666,7 +666,7 @@ func TestDisablePolicyTun_TearsDownBypassSet(t *testing.T) {
 	h.svc.currentBypassGeoIPTags = nil
 	h.svc.teardownBypassSetFn = func(context.Context) { seq.mark("teardown") }
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(policy-tun): %v", err)
 	}
 	seq.requireTeardownAfterUninstall(t)

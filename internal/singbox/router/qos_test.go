@@ -951,7 +951,7 @@ func TestEnable_Tproxy_QoSClasses_WiresConfigAndIPTables(t *testing.T) {
 		XtDscpProbe:        func(context.Context) bool { return true },
 	})
 
-	if err := svc.Enable(context.Background()); err != nil {
+	if err := svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable (tproxy, qos): %v", err)
 	}
 
@@ -1031,7 +1031,7 @@ func TestEnable_Tproxy_QoS_WritesRoutesSlot(t *testing.T) {
 	svc.deps.NetfilterPreflight = func(context.Context) error { return nil }
 	svc.deps.XtDscpProbe = func(context.Context) bool { return true }
 
-	if err := svc.Enable(context.Background()); err != nil {
+	if err := svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	slotRaw, err := os.ReadFile(filepath.Join(dir, "18-qos-routes.json"))
@@ -1062,7 +1062,7 @@ func TestEnable_Tproxy_QoS_WritesRoutesSlot(t *testing.T) {
 	}
 
 	// Disable parks the slot with the router.
-	if err := svc.Disable(context.Background()); err != nil {
+	if err := svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "18-qos-routes.json")); !os.IsNotExist(err) {
@@ -1097,7 +1097,7 @@ func TestEnable_Tproxy_QoSXtDscpMissing_DegradesWithoutFailing(t *testing.T) {
 		XtDscpProbe:        func(context.Context) bool { return false },
 	})
 
-	if err := svc.Enable(context.Background()); err != nil {
+	if err := svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable must not fail when xt_dscp is unavailable: %v", err)
 	}
 	if strings.Contains(restoreInput, "-m dscp") {

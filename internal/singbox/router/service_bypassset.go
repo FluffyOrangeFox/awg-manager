@@ -277,10 +277,17 @@ func (s *ServiceImpl) ensureBypassSetExists(ctx context.Context) {
 // «set is in use by a kernel component» и набор переживёт снос. Staging
 // правилами не занят никогда, но без сноса остаётся сиротой с записями
 // последней пересборки в памяти ядра.
+//
+// Дамп — ПЕРВЫМ: хук netfilter.d пересоздаёт набор из дампа, если набора нет,
+// и сработавший между сносом набора и удалением дампа хук воскресил бы его до
+// перезагрузки.
 func (s *ServiceImpl) teardownBypassSet(ctx context.Context) {
 	if s.teardownBypassSetFn != nil {
 		s.teardownBypassSetFn(ctx)
 		return
+	}
+	if err := os.Remove(bypassSavePath); err != nil && !os.IsNotExist(err) {
+		s.bypassLog.Warn("bypass-set", "", "удаление дампа набора: "+err.Error())
 	}
 	if bypassset.IPSetBinary() != "" {
 		if err := bypassset.DestroySet(ctx); err != nil {
@@ -289,9 +296,6 @@ func (s *ServiceImpl) teardownBypassSet(ctx context.Context) {
 		if err := bypassset.DestroyStagingSet(ctx); err != nil {
 			s.bypassLog.Warn("bypass-set", "", "снос staging-набора: "+err.Error())
 		}
-	}
-	if err := os.Remove(bypassSavePath); err != nil && !os.IsNotExist(err) {
-		s.bypassLog.Warn("bypass-set", "", "удаление дампа набора: "+err.Error())
 	}
 }
 

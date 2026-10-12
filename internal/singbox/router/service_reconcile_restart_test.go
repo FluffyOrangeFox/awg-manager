@@ -459,7 +459,7 @@ func TestDisable_WritesJournalEntry(t *testing.T) {
 	rec := &recordingAppLogger{}
 	svc.appLog = logging.NewScopedLogger(rec, logging.GroupRouting, logging.SubSingboxRouter)
 
-	if err := svc.Disable(context.Background()); err != nil {
+	if err := svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
 	found := false

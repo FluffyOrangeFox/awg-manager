@@ -859,7 +859,7 @@ func TestBuildRestoreInput_LANBridges_DifferentPortsPerBridge(t *testing.T) {
 
 func TestBuildRestoreInput_NoLANBridges_NoDNSRescueRules(t *testing.T) {
 	// Empty LANBridges → no DNS-RESCUE rules emitted at all. Caller
-	// (Service.Enable) skips DNS rescue entirely on routers without
+	// (ServiceImpl.enable) skips DNS rescue entirely on routers without
 	// _NDM_HOTSPOT_DNSREDIR entries.
 	spec := RestoreInputSpec{
 		PolicyMark: "0xffffaae",

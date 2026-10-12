@@ -237,7 +237,7 @@ func (s *ServiceImpl) reconcilePolicyTun(ctx context.Context, sr storage.Singbox
 		if !provisioned && !slotActive {
 			return nil
 		}
-		return s.Disable(ctx)
+		return s.disable(ctx)
 	}
 
 	// Транзиентная ошибка пробы (глюк NDMS на буте) НЕ равна «интерфейс исчез»:

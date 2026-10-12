@@ -566,7 +566,7 @@ func TestDisable_TearsDownBypassSetWithoutTagSnapshot(t *testing.T) {
 	svc.currentBypassGeoIPTags = nil
 	svc.teardownBypassSetFn = func(context.Context) { close(torn) }
 
-	if err := svc.Disable(context.Background()); err != nil {
+	if err := svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
 	select {

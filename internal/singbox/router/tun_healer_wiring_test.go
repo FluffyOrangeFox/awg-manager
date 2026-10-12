@@ -20,7 +20,7 @@ import (
 // расписание уже вынесено в переменную ради этого.
 func TestReconcileFakeIPTun_TickDrivesTunHealer(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
@@ -43,7 +43,7 @@ func TestReconcileFakeIPTun_TickDrivesTunHealer(t *testing.T) {
 
 func TestReconcilePolicyTun_TickDrivesTunHealer(t *testing.T) {
 	h := newPolicyTunEnableHarness(t, "")
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}

@@ -174,7 +174,7 @@ func mustOrderCalls(t *testing.T, log *callLog, a, b string) {
 func TestPolicyTunEnable_ProvisionOrder(t *testing.T) {
 	h := newPolicyTunEnableHarness(t, "")
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 
@@ -251,7 +251,7 @@ func TestPolicyTunEnable_PrefersPersistedIndex(t *testing.T) {
 		t.Fatalf("SetOpkgTunState: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 
@@ -285,7 +285,7 @@ func TestPolicyTunEnable_ReusesHeldOwnInterface(t *testing.T) {
 		t.Fatalf("SetOpkgTunState: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 
@@ -307,7 +307,7 @@ func TestPolicyTunEnable_ReallocatesWhenPersistedIndexForeign(t *testing.T) {
 		t.Fatalf("SetOpkgTunState: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 
@@ -328,7 +328,7 @@ func TestPolicyTunEnable_ReallocatesWhenScanFails(t *testing.T) {
 		t.Fatalf("SetOpkgTunState: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 
@@ -347,7 +347,7 @@ func TestPolicyTunEnable_ReallocatesWhenScanUnavailable(t *testing.T) {
 		t.Fatalf("SetOpkgTunState: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 
@@ -365,7 +365,7 @@ func TestPolicyTunEnable_IdempotentWhenLive(t *testing.T) {
 		t.Fatalf("SetOpkgTunState: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 
@@ -387,7 +387,7 @@ func TestPolicyTunEnable_RollbackOnFailure(t *testing.T) {
 		t.Run(step, func(t *testing.T) {
 			h := newPolicyTunEnableHarness(t, step)
 
-			if err := h.svc.Enable(context.Background()); err == nil {
+			if err := h.svc.enable(context.Background()); err == nil {
 				t.Fatalf("expected error when %s fails", step)
 			}
 
@@ -474,7 +474,7 @@ func TestPolicyTunEnable_RollbackRestoresPreviousPersist(t *testing.T) {
 		t.Fatalf("SetOpkgTunState: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err == nil {
+	if err := h.svc.enable(context.Background()); err == nil {
 		t.Fatal("expected error when SetDefaultRoute fails")
 	}
 
@@ -503,7 +503,7 @@ func TestPolicyTunEnable_RollbackRestoresPreviousPersist(t *testing.T) {
 func TestPolicyTunEnable_RollbackClearsPersistOnFirstEnable(t *testing.T) {
 	h := newPolicyTunEnableHarness(t, "SetDefaultRoute")
 
-	if err := h.svc.Enable(context.Background()); err == nil {
+	if err := h.svc.enable(context.Background()); err == nil {
 		t.Fatal("expected error when SetDefaultRoute fails")
 	}
 	if st := h.loadPolicyTun(t); st != nil {
@@ -535,7 +535,7 @@ func TestPolicyTunEnable_QoSInstallsDSCPOnlyChains(t *testing.T) {
 	h.svc.deps.NetfilterPreflight = func(context.Context) error { return nil }
 	h.svc.deps.XtDscpProbe = func(context.Context) bool { return true }
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 
@@ -582,7 +582,7 @@ func TestPolicyTunEnable_QoSSkippedWhenTProxyUnavailable(t *testing.T) {
 	}
 	h.svc.deps.XtDscpProbe = func(context.Context) bool { return true }
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("missing TPROXY must degrade QoS, not fail Enable: %v", err)
 	}
 	if installs != 0 {
@@ -607,7 +607,7 @@ func TestPolicyTunEnable_NoQoSNoIPTables(t *testing.T) {
 		return nil
 	})
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 	if installs != 0 {
@@ -627,7 +627,7 @@ func TestPolicyTunEnable_PermitsInterfaceInPolicy(t *testing.T) {
 	pol := h.withPolicy(t, "Policy0")
 	h.svc.deps.RunningConfig = &fakeRunningConfig{lines: []string{"ip policy Policy0", "!"}}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 	want := []string{"Policy0:OpkgTun0:0"}
@@ -646,7 +646,7 @@ func TestPolicyTunEnable_PermitsWhenOtherPolicyPermitted(t *testing.T) {
 		"ip policy Policy1", "!",
 	}}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 	want := []string{"Policy1:OpkgTun0:0"}
@@ -661,7 +661,7 @@ func TestPolicyTunEnable_SkipsPermitWithoutPolicyName(t *testing.T) {
 	pol := h.withPolicy(t, "")
 	h.svc.deps.RunningConfig = &fakeRunningConfig{lines: []string{"ip policy Policy0", "!"}}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 	if len(pol.permits) != 0 {
@@ -676,7 +676,7 @@ func TestPolicyTunEnable_SkipsPermitWhenAlreadyPermitted(t *testing.T) {
 	pol := h.withPolicy(t, "Policy0")
 	h.svc.deps.RunningConfig = &fakeRunningConfig{lines: healthyPolicyTunRC("OpkgTun0")}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 	if len(pol.permits) != 0 {
@@ -692,7 +692,7 @@ func TestPolicyTunEnable_PermitFailureDoesNotFailEnable(t *testing.T) {
 	pol.permitErr = errors.New("injected: permit")
 	h.svc.deps.RunningConfig = &fakeRunningConfig{lines: []string{"ip policy Policy0", "!"}}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("отказ permit не должен валить Enable: %v", err)
 	}
 	if len(pol.permits) != 1 {
@@ -723,7 +723,7 @@ func TestPolicyTunEnable_IngressWithoutDNAT(t *testing.T) {
 	rec := &ingressRecorder{natDump: "-P PREROUTING ACCEPT\n", ruleDump: ruleDumpFor()}
 	h.svc.deps.IPTables = rec.tables()
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 	if n := rec.ipCalls("rule", "add", "iif", "nwg3", "table", fakeIPIngressTableStr()); n != 1 {
@@ -751,7 +751,7 @@ func TestPolicyTunEnable_PermitACLv6FollowsAddress(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	ndmsName := tunNDMSName(0)
@@ -775,7 +775,7 @@ func TestPolicyTunEnable_IgnoresFakeIPMTU(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 
@@ -840,7 +840,7 @@ func TestPolicyTunEnable_DoubleRCIFailureKeepsRecordedNAT(t *testing.T) {
 			PolicyTun: &storage.OpkgTunPolicyData{NATSegments: []storage.PolicyTunNATSegment{{Name: "Guest", PriorMode: "dynamic"}}}}
 		h := setup(t, prev)
 
-		if err := h.svc.Enable(context.Background()); err == nil {
+		if err := h.svc.enable(context.Background()); err == nil {
 			t.Fatal("expected error when SetStaticNAT fails")
 		}
 
@@ -883,7 +883,7 @@ func TestPolicyTunEnable_DoubleRCIFailureKeepsRecordedNAT(t *testing.T) {
 			t.Fatalf("SetOpkgTunState: %v", err)
 		}
 
-		if err := h.svc.Enable(context.Background()); err == nil {
+		if err := h.svc.enable(context.Background()); err == nil {
 			t.Fatal("expected error when SetDefaultRoute fails")
 		}
 
@@ -900,7 +900,7 @@ func TestPolicyTunEnable_DoubleRCIFailureKeepsRecordedNAT(t *testing.T) {
 	t.Run("первый enable: запись остаётся с payload", func(t *testing.T) {
 		h := setup(t, nil)
 
-		if err := h.svc.Enable(context.Background()); err == nil {
+		if err := h.svc.enable(context.Background()); err == nil {
 			t.Fatal("expected error when SetStaticNAT fails")
 		}
 
@@ -941,7 +941,7 @@ func TestPolicyTunEnable_FailedInstallMarksNetfilterUnknown(t *testing.T) {
 	// Заранее «известное» состояние: именно оно обязано слететь на провале.
 	h.svc.netfilterStateKnown = true
 
-	if err := h.svc.Enable(context.Background()); err == nil {
+	if err := h.svc.enable(context.Background()); err == nil {
 		t.Fatal("ожидался провал Install")
 	}
 	if h.svc.netfilterStateKnown {
@@ -958,7 +958,7 @@ func TestEnablePolicyTun_RefreshesAWGOutbounds(t *testing.T) {
 	called := 0
 	h.svc.deps.AWGOutboundsRefresh = func(context.Context) error { called++; return nil }
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 	if called == 0 {

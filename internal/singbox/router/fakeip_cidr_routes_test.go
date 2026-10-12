@@ -370,7 +370,7 @@ func TestEnable_AppliesCIDRRoutes(t *testing.T) {
 		t.Fatalf("write 21-fakeip.json: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("enable: %v", err)
 	}
 	// Index 0 → NDMS name OpkgTun0; the loop-safe proxy CIDR gets a specific route.
@@ -404,7 +404,7 @@ func TestDisable_RemovesCIDRRoutes(t *testing.T) {
 
 	provisionForDisable(t, h) // Enable + clear the call log
 
-	if err := h.svc.Disable(t.Context()); err != nil {
+	if err := h.svc.disable(t.Context()); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
 
@@ -430,7 +430,7 @@ func TestReconcileFakeIPTun_ReaddsCIDRRouteWhenMissing(t *testing.T) {
 		t.Fatalf("write 21-fakeip.json: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
@@ -474,7 +474,7 @@ func TestReconcileFakeIPTun_V6CIDRSelfHealNoV4(t *testing.T) {
 		t.Fatalf("write 21-fakeip.json: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
@@ -515,7 +515,7 @@ func TestReconcileFakeIPTun_V6CIDRGatedOnPresenceProbe(t *testing.T) {
 		t.Fatalf("write 21-fakeip.json: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}

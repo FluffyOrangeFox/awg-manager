@@ -34,7 +34,7 @@ func TestFakeIPEnable_ReleasesForeignPolicyTunOwnership(t *testing.T) {
 		t.Fatalf("SetOpkgTunState: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(fakeip): %v", err)
 	}
 
@@ -89,7 +89,7 @@ func TestFakeIPEnable_RollbackRestoresPreviousRecord(t *testing.T) {
 		t.Fatalf("SetOpkgTunState: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err == nil {
+	if err := h.svc.enable(context.Background()); err == nil {
 		t.Fatal("Enable must fail (injected SetAddress)")
 	}
 
@@ -105,7 +105,7 @@ func TestFakeIPEnable_RollbackRestoresPreviousRecord(t *testing.T) {
 func TestFakeIPEnable_RollbackClearsRecordOnFirstEnable(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "SetAddress")
 
-	if err := h.svc.Enable(context.Background()); err == nil {
+	if err := h.svc.enable(context.Background()); err == nil {
 		t.Fatal("Enable must fail (injected SetAddress)")
 	}
 
@@ -202,7 +202,7 @@ func TestFakeIPEnable_ReprovisionsWhenPersistedIndexForeign(t *testing.T) {
 		t.Fatalf("SetOpkgTunState: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(fakeip): %v", err)
 	}
 
@@ -230,7 +230,7 @@ func TestPolicyTunEnable_ReprovisionsWhenProvisionedLiveIndexForeign(t *testing.
 		t.Fatalf("SetOpkgTunState: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 
@@ -311,7 +311,7 @@ func TestTunEnable_NoReprovisionWhenScanUnavailable(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("SetOpkgTunState: %v", err)
 			}
-			if err := h.svc.Enable(context.Background()); err != nil {
+			if err := h.svc.enable(context.Background()); err != nil {
 				t.Fatalf("Enable(fakeip): %v", err)
 			}
 			for _, c := range h.log.calls {
@@ -329,7 +329,7 @@ func TestTunEnable_NoReprovisionWhenScanUnavailable(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("SetOpkgTunState: %v", err)
 			}
-			if err := h.svc.Enable(context.Background()); err != nil {
+			if err := h.svc.enable(context.Background()); err != nil {
 				t.Fatalf("Enable(policy-tun): %v", err)
 			}
 			for _, c := range h.log.calls {
@@ -366,7 +366,7 @@ func TestFakeIPEnable_EmptyPool6DisablesV6(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(fakeip): %v", err)
 	}
 
@@ -389,7 +389,7 @@ func TestFakeIPEnable_EmptyPool6DisablesV6(t *testing.T) {
 // в конфиг не попадает (собственный стек sing-tun).
 func TestFakeIPOverlayFromState_UsesNormalizedSettings(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(fakeip): %v", err)
 	}
 	// Сырое, до-нормализационное значение в персисте.
@@ -445,7 +445,7 @@ func TestFakeIPEnable_KeepsForeignNATPayloadWhenReleaseFails(t *testing.T) {
 		t.Fatalf("SetOpkgTunState: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(fakeip): %v", err)
 	}
 
@@ -480,7 +480,7 @@ func TestFakeIPEnable_HandoverScanUnavailable_LeavesPreviousInterface(t *testing
 		t.Fatalf("SetOpkgTunState: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(fakeip) при упавшем скане: %v", err)
 	}
 	if h.log.has("Delete:OpkgTun2") {
@@ -518,7 +518,7 @@ func TestPolicyTunEnable_HandoverScanUnavailable_LeavesPreviousInterface(t *test
 		t.Fatalf("SetOpkgTunState: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun) при упавшем скане: %v", err)
 	}
 	if h.log.has("Delete:OpkgTun4") {
@@ -577,7 +577,7 @@ func TestFakeIPDisable_SparesForeignInterfaceOnPersistedIndex(t *testing.T) {
 			deletes := stubOrphanNetdev(t, true)
 			h.svc.deps.OpkgTunScan = tc.scan
 
-			if err := h.svc.Disable(context.Background()); err != nil {
+			if err := h.svc.disable(context.Background()); err != nil {
 				t.Fatalf("Disable(fakeip): %v", err)
 			}
 
@@ -771,7 +771,7 @@ func TestPolicyTunDisable_SparesForeignInterfaceOnPersistedIndex(t *testing.T) {
 			provisionPolicyTunForDisable(t, h)
 			h.svc.deps.OpkgTunScan = tc.scan
 
-			if err := h.svc.Disable(context.Background()); err != nil {
+			if err := h.svc.disable(context.Background()); err != nil {
 				t.Fatalf("Disable(policy-tun): %v", err)
 			}
 
@@ -811,7 +811,7 @@ func TestPolicyTunDisable_ScanUnavailable_RetriesNextTick(t *testing.T) {
 	provisionPolicyTunForDisable(t, h)
 	h.svc.deps.OpkgTunScan = scanFails()
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(policy-tun): %v", err)
 	}
 	holdCalls := []string{"RemoveDefaultRoute:OpkgTun0", "InterfaceDown:OpkgTun0", "ClearAddress:OpkgTun0"}
@@ -867,7 +867,7 @@ func TestReconcile_ScanUnavailableHealsInsteadOfReprovision(t *testing.T) {
 			return nil, errors.New("injected: scan")
 		}
 		h := newFakeIPEnableHarness(t, "")
-		if err := h.svc.Enable(context.Background()); err != nil {
+		if err := h.svc.enable(context.Background()); err != nil {
 			t.Fatalf("Enable: %v", err)
 		}
 		h.log.calls = nil
@@ -914,7 +914,7 @@ func TestEnableFakeIPTun_PersistsBeforeCreate(t *testing.T) {
 	probe := &createPersistProbe{OpkgTunProvisioner: h.svc.deps.OpkgTun, store: h.store}
 	h.svc.deps.OpkgTun = probe
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	if probe.atCreate == nil {
@@ -930,7 +930,7 @@ func TestPolicyTunEnable_PersistsBeforeCreate(t *testing.T) {
 	probe := &createPersistProbe{OpkgTunProvisioner: h.svc.deps.OpkgTun, store: h.store}
 	h.svc.deps.OpkgTun = probe
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	if probe.atCreate == nil {

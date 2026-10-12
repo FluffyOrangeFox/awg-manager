@@ -34,10 +34,10 @@ func TestM1_PolicyTunRollbackHoldsReusedRecord(t *testing.T) {
 	o.f.ExpectCreate("OpkgTun0")
 	ctx := context.Background()
 
-	if err := h.svc.Enable(ctx); err != nil {
+	if err := h.svc.enable(ctx); err != nil {
 		t.Fatalf("Enable #1: %v", err)
 	}
-	if err := h.svc.Disable(ctx); err != nil {
+	if err := h.svc.disable(ctx); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
 	if len(pol.permits) == 0 {
@@ -46,7 +46,7 @@ func TestM1_PolicyTunRollbackHoldsReusedRecord(t *testing.T) {
 	h.svc.deps.OpkgTun = mtuFailOpkg{o}
 	mark := len(o.f.Posts)
 
-	if err := h.svc.Enable(ctx); err == nil {
+	if err := h.svc.enable(ctx); err == nil {
 		t.Fatal("Enable #2 обязан упасть на SetMTU")
 	}
 	if !o.f.Has("OpkgTun0") {
@@ -78,7 +78,7 @@ func TestM1_PolicyTunRollbackTearsDownCreatedRecord(t *testing.T) {
 	o.f.ExpectCreate("OpkgTun0")
 	h.svc.deps.OpkgTun = mtuFailOpkg{o}
 
-	if err := h.svc.Enable(context.Background()); err == nil {
+	if err := h.svc.enable(context.Background()); err == nil {
 		t.Fatal("Enable обязан упасть на SetMTU")
 	}
 	if len(o.f.Created) != 1 {
@@ -108,7 +108,7 @@ func TestM1_FakeIPRollbackHoldVsTeardown(t *testing.T) {
 			old := fakeIPLinkPresent
 			fakeIPLinkPresent = func(context.Context, string) bool { return tc.reused }
 			t.Cleanup(func() { fakeIPLinkPresent = old })
-			if err := h.svc.Enable(context.Background()); err == nil {
+			if err := h.svc.enable(context.Background()); err == nil {
 				t.Fatal("Enable обязан упасть на SetMTU")
 			}
 			deleted := h.log.idxOf("Delete:OpkgTun0") >= 0

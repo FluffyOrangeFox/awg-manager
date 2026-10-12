@@ -41,7 +41,7 @@ func TestReconcile_DispatchesFakeIPTun(t *testing.T) {
 
 	// Provision first so Enabled=true + provisioned + live, then a Reconcile must
 	// take the drift-heal arm (NOT the tproxy switch, NOT Enable re-provision).
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
@@ -133,7 +133,7 @@ func TestReconcileFakeIPTun_Reprovision_DoesNotClearManualStop(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 
 	// Provision once via the USER path (this one is allowed to clear).
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	sb := h.svc.deps.Singbox.(*fakeSingbox)
@@ -184,7 +184,7 @@ func TestEnableLocked_DriftHeal_TproxySkipsClearManualStop(t *testing.T) {
 		t.Errorf("drift-heal enableLocked(false) must NOT clear, calls = %d", singbox.clearManualStopCalls)
 	}
 	// Public Enable (user path) DOES clear — guards the gate both ways.
-	if err := svc.Enable(context.Background()); err != nil {
+	if err := svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable (user): %v", err)
 	}
 	if singbox.clearManualStopCalls != 1 {
@@ -200,7 +200,7 @@ func TestReconcileFakeIPTun_ReprovisionsWhenGone(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 
 	// Provision once.
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	if c := countCalls(h.log, "Create:OpkgTun0:private"); c != 1 {
@@ -236,7 +236,7 @@ func TestReconcileFakeIPTun_DriftHealNoRestartByReconcile(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 
 	// Provision with sing-box running so Enable succeeds.
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
@@ -275,7 +275,7 @@ func TestReconcileFakeIPTun_DriftHealNoRestartByReconcile(t *testing.T) {
 func TestReconcileFakeIPTun_NoReprovisionWhenHealthy(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	// Index 0 live + a (bogus) re-provision would pick index 1 → proves no realloc.
@@ -316,7 +316,7 @@ func TestGetStatus_FakeIPIface(t *testing.T) {
 		t.Errorf("FakeIPIface = %q, want empty before provisioning", st0.FakeIPIface)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.IPTables = errProbeIPTables()
@@ -341,7 +341,7 @@ func TestReconcileFakeIPTun_NoMutationWhenNoDrift(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 
 	// Provision: Enable adds the v4+v6 routes.
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
@@ -382,7 +382,7 @@ func TestReconcileFakeIPTun_NoMutationWhenNoDrift(t *testing.T) {
 func TestReconcileFakeIPTun_ReaddsRouteWhenMissing(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
@@ -424,7 +424,7 @@ func TestReconcileFakeIPTun_ProbeErrorNoReprovision(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 
 	// Provision so persist is provisioned (index 0).
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	if c := countCalls(h.log, "Create:OpkgTun0:private"); c != 1 {
@@ -454,7 +454,7 @@ func TestReconcileFakeIPTun_RevivalEnablesSlotFakeIPNotSlotRouter(t *testing.T) 
 	h := newFakeIPEnableHarness(t, "")
 
 	// Provision with sing-box running.
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
@@ -528,7 +528,7 @@ func TestReconcileFakeIPTun_ParkedSlotAliveEngine_RepromotesSlot(t *testing.T) {
 // не пропадёт заодно и v4.
 func TestReconcileFakeIPTun_PoolV6HealsWhenV4Present(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
@@ -565,7 +565,7 @@ func TestReconcileFakeIPTun_PoolV6HealsWhenV4Present(t *testing.T) {
 // второй — молчать.
 func TestReconcileFakeIPTun_FirstTickSweepsForeignNetfilter(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
@@ -897,7 +897,7 @@ func TestFakeIPWithConfig_OverlayKeepsExternalConfiguration(t *testing.T) {
 func TestFakeIPEnable_WritesExternalConfiguration(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 	h.svc.deps.Singbox.(*fakeSingbox).tunHotReload = true
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	raw, err := os.ReadFile(filepath.Join(h.dir, "21-fakeip.json"))

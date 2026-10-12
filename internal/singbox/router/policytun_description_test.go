@@ -332,7 +332,7 @@ func TestPolicyTunEnable_CustomDescription(t *testing.T) {
 	probe := &createPersistProbe{OpkgTunProvisioner: h.svc.deps.OpkgTun, store: h.store}
 	h.svc.deps.OpkgTun = probe
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 	if len(h.opkg.descs) != 1 || h.opkg.descs[0] != "Awgmanager" {
@@ -360,7 +360,7 @@ func TestPolicyTunEnable_RenamesHeldOwnInterface(t *testing.T) {
 	probe := &createPersistProbe{OpkgTunProvisioner: h.svc.deps.OpkgTun, store: h.store}
 	h.svc.deps.OpkgTun = probe
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 	if !h.log.has("Create:OpkgTun3:public") {
@@ -616,7 +616,7 @@ func TestPolicyTunEnable_RollbackRecordsRenameIntention(t *testing.T) {
 	}
 	setPolicyTunDescription(t, h.store, "Awgmanager")
 
-	if err := h.svc.Enable(context.Background()); err == nil {
+	if err := h.svc.enable(context.Background()); err == nil {
 		t.Fatal("Enable обязан упасть на SetDefaultRoute")
 	}
 	if !h.log.has("Create:OpkgTun3:public") {
@@ -746,7 +746,7 @@ func TestPolicyTunDisable_HoldsRenamedInterface(t *testing.T) {
 	provisionPolicyTunForDisable(t, h)
 	h.svc.deps.OpkgTunScan = scanOurs("Awgmanager", "OpkgTun0")
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(policy-tun): %v", err)
 	}
 	if !h.log.has("RemoveDefaultRoute:OpkgTun0") {

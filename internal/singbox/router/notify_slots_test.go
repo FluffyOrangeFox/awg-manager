@@ -54,7 +54,7 @@ func TestDisable_Tproxy_NotifiesRoutingSlotsChanged(t *testing.T) {
 	svc.deps.Singbox = &fakeSingbox{dir: dir, isRunningFn: func() (bool, int) { return true, 1234 }}
 	svc.deps.IPTables = newStubIPTables(func(_ context.Context, _ string) error { return nil })
 
-	if err := svc.Disable(context.Background()); err != nil {
+	if err := svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
 	if notified != 1 {
@@ -74,7 +74,7 @@ func TestDisable_Tproxy_NotifiesRoutingSlotsChanged(t *testing.T) {
 func TestReconcileFakeIPTun_DriftHealSlotRevive_NotifiesRoutingSlotsChanged(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
@@ -148,7 +148,7 @@ func TestEnable_Tproxy_NotifiesRoutingSlotsChanged(t *testing.T) {
 	svc.deps.NetfilterPreflight = func(context.Context) error { return nil }
 	svc.deps.XtDscpProbe = func(context.Context) bool { return true }
 
-	if err := svc.Enable(context.Background()); err != nil {
+	if err := svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	if notified == 0 {

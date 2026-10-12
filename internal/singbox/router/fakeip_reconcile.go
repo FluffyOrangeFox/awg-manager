@@ -44,7 +44,7 @@ func (s *ServiceImpl) reconcileFakeIPTun(ctx context.Context, sr storage.Singbox
 		if !provisioned && !slotActive {
 			return nil
 		}
-		return s.Disable(ctx)
+		return s.disable(ctx)
 	}
 
 	// Первотиковый свип чужого netfilter (зеркало policytun_reconcile.go и

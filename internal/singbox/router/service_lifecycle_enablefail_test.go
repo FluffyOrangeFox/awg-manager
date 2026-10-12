@@ -53,7 +53,7 @@ func TestEnable_InstallFailureParksSlotAndDropsSnapshot(t *testing.T) {
 	svc.appliedSpec = prev
 	svc.netfilterStateKnown = true
 
-	err := svc.Enable(context.Background())
+	err := svc.enable(context.Background())
 	if err == nil {
 		t.Fatal("отказ установки правил обязан дойти до вызывающего")
 	}

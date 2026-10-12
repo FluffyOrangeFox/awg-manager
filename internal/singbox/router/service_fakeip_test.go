@@ -297,7 +297,7 @@ func (h *fakeIPEnableHarness) loadFakeIP(t *testing.T) *storage.OpkgTunState {
 func TestEnable_DispatchesFakeIPTun(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(fakeip-tun): %v", err)
 	}
 
@@ -386,7 +386,7 @@ func TestEnable_DispatchesFakeIPTun(t *testing.T) {
 func TestEnableFakeIPTun_SlotFakeIPWritten(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(fakeip-tun): %v", err)
 	}
 
@@ -520,7 +520,7 @@ func TestEnableFakeIPTun_UsesPersistedEngineSettings(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 
@@ -601,7 +601,7 @@ func TestEnableFakeIPTun_RollbackOnFailure(t *testing.T) {
 		t.Run(step, func(t *testing.T) {
 			h := newFakeIPEnableHarness(t, step)
 
-			err := h.svc.Enable(context.Background())
+			err := h.svc.enable(context.Background())
 			if err == nil {
 				t.Fatalf("expected error when %s fails", step)
 			}
@@ -682,7 +682,7 @@ func TestEnableFakeIPTun_RollbackRestoresPriorRouterSlotState(t *testing.T) {
 		t.Fatalf("pre-disable SlotRouter: %v", err)
 	}
 
-	err := h.svc.Enable(context.Background())
+	err := h.svc.enable(context.Background())
 	if err == nil {
 		t.Fatal("expected error when AddRoute fails")
 	}
@@ -708,7 +708,7 @@ func TestEnableFakeIPTun_RollbackOnReadinessTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
-	err := h.svc.Enable(ctx)
+	err := h.svc.enable(ctx)
 	if err == nil {
 		t.Fatal("expected error when readiness never becomes ready")
 	}
@@ -740,7 +740,7 @@ func TestEnableFakeIPTun_RefusesWithoutEgress(t *testing.T) {
 		t.Fatalf("write 21-fakeip.json: %v", err)
 	}
 
-	err := h.svc.Enable(context.Background())
+	err := h.svc.enable(context.Background())
 	if err == nil {
 		t.Fatal("expected error when fakeip route.final is not a known outbound")
 	}
@@ -773,7 +773,7 @@ func TestEnableFakeIPTun_DNSConfirmFalse_StillSucceeds(t *testing.T) {
 		return false
 	})
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable must succeed despite an unconfirmed DNS round-trip: %v", err)
 	}
 
@@ -804,7 +804,7 @@ func TestEnableFakeIPTun_DNSConfirmTrue_Succeeds(t *testing.T) {
 		return n.Contains(netip.MustParseAddr("10.128.0.5")) // in-pool ⇒ confirmed
 	})
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	st := h.loadFakeIP(t)
@@ -844,7 +844,7 @@ func TestEnable_TproxyUnchanged(t *testing.T) {
 		FakeIPTun:      DefaultFakeIPTunParams(),
 	})
 
-	if err := svc.Enable(context.Background()); err != nil {
+	if err := svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable (tproxy): %v", err)
 	}
 	if len(log.calls) != 0 {
@@ -889,7 +889,7 @@ func enableTproxyClearStopSvc(t *testing.T) (*ServiceImpl, *fakeSingbox, *storag
 func TestEnable_Tproxy_ClearsManualStop(t *testing.T) {
 	svc, singbox, settingsStore := enableTproxyClearStopSvc(t)
 
-	if err := svc.Enable(context.Background()); err != nil {
+	if err := svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable (tproxy): %v", err)
 	}
 	if singbox.clearManualStopCalls != 1 {
@@ -905,7 +905,7 @@ func TestEnable_Tproxy_ClearManualStopError_FailsFast(t *testing.T) {
 	svc, singbox, settingsStore := enableTproxyClearStopSvc(t)
 	singbox.clearManualStopErr = errors.New("disk full")
 
-	err := svc.Enable(context.Background())
+	err := svc.enable(context.Background())
 	if err == nil {
 		t.Fatalf("Enable: want error when ClearManualStop fails, got nil")
 	}
@@ -925,7 +925,7 @@ func TestEnable_Tproxy_ClearManualStopError_FailsFast(t *testing.T) {
 func TestEnable_FakeIP_ClearsManualStopBeforeProvisioning(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable (fakeip-tun): %v", err)
 	}
 	fs := h.svc.deps.Singbox.(*fakeSingbox)
@@ -943,7 +943,7 @@ func TestEnable_FakeIP_ClearManualStopError_NoProvisioning(t *testing.T) {
 	fs := h.svc.deps.Singbox.(*fakeSingbox)
 	fs.clearManualStopErr = errors.New("disk full")
 
-	err := h.svc.Enable(context.Background())
+	err := h.svc.enable(context.Background())
 	if err == nil {
 		t.Fatalf("Enable: want error when ClearManualStop fails, got nil")
 	}
@@ -967,7 +967,7 @@ func TestEnableFakeIPTun_AllocatesLowestFreeIndex(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true, 1: true}}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	st := h.loadFakeIP(t)
@@ -990,7 +990,7 @@ func TestEnableFakeIPTun_IdempotentWhenProvisioned(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 
 	// First Enable provisions opkgtun0.
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("first Enable: %v", err)
 	}
 	st1 := h.loadFakeIP(t)
@@ -1008,7 +1008,7 @@ func TestEnableFakeIPTun_IdempotentWhenProvisioned(t *testing.T) {
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
 
 	// Second Enable with the same settings → no-op.
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("second Enable (idempotent): %v", err)
 	}
 
@@ -1033,7 +1033,7 @@ func TestEnableFakeIPTun_IdempotentWhenProvisioned(t *testing.T) {
 func TestEnableFakeIPTun_ReprovisionsWhenIfaceGone(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("first Enable: %v", err)
 	}
 	if c := countCalls(h.log, "Create:OpkgTun0:private"); c != 1 {
@@ -1044,7 +1044,7 @@ func TestEnableFakeIPTun_ReprovisionsWhenIfaceGone(t *testing.T) {
 	// the iface vanished. Guard must fall through and re-provision into index 0.
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{}}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("second Enable (reprovision): %v", err)
 	}
 	if c := countCalls(h.log, "Create:OpkgTun0:private"); c != 2 {
@@ -1073,7 +1073,7 @@ func captureDrain(t *testing.T) func() func() {
 // clears the call log so subsequent Disable assertions see only teardown calls.
 func provisionForDisable(t *testing.T, h *fakeIPEnableHarness) {
 	t.Helper()
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable (provision for disable): %v", err)
 	}
 	// Allocator reflects the now-live iface so a stray Reconcile would no-op.
@@ -1138,7 +1138,7 @@ func TestDisableFakeIPTun_OrphanNetdevDeleted(t *testing.T) {
 	provisionForDisable(t, h)
 	deletes := stubOrphanNetdev(t, true) // orphan present
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
 	if got := deletes(); got != 1 {
@@ -1154,7 +1154,7 @@ func TestDisableFakeIPTun_NoOrphanNoDelete(t *testing.T) {
 	provisionForDisable(t, h)
 	deletes := stubOrphanNetdev(t, false) // netdev absent
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
 	if got := deletes(); got != 0 {
@@ -1170,7 +1170,7 @@ func TestDisableFakeIPTun_Ordering(t *testing.T) {
 	// NDMS RCI ops + the route Interface take the CamelCase OpkgTun0; the kernel
 	// name is unused on the teardown path (no flush on disable).
 	const ndmsName = "OpkgTun0"
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(fakeip-tun): %v", err)
 	}
 
@@ -1252,7 +1252,7 @@ func TestDisableFakeIPTun_NoAddressClearsOnHappyPath(t *testing.T) {
 	provisionForDisable(t, h)
 
 	const ndmsName = "OpkgTun0"
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(fakeip-tun): %v", err)
 	}
 	if h.log.has("ClearAddress:" + ndmsName) {
@@ -1281,7 +1281,7 @@ func TestDisableFakeIPTun_DeleteFailureClearsAddresses(t *testing.T) {
 	h.svc.deps.OpkgTun = &recOpkgTun{log: h.log, failAt: "Delete"}
 
 	const ndmsName = "OpkgTun0"
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(fakeip-tun): %v", err)
 	}
 	mustOrder := func(a, b string) {
@@ -1334,7 +1334,7 @@ func TestEnableFakeIPTun_RollbackSurvivesCtxCancel(t *testing.T) {
 		cancel:     cancel,
 	}
 
-	if err := h.svc.Enable(ctx); err == nil {
+	if err := h.svc.enable(ctx); err == nil {
 		t.Fatal("expected Enable to fail (ctx cancelled at SetMTU)")
 	}
 	// Rollback ran on a detached ctx: the iface teardown must have reached NDMS
@@ -1355,7 +1355,7 @@ func TestDisableFakeIPTun_DrainOffLock(t *testing.T) {
 	getDrain := captureDrain(t)
 	provisionForDisable(t, h)
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
 
@@ -1392,7 +1392,7 @@ func TestDisableFakeIPTun_BestEffort(t *testing.T) {
 			// Inject the failure into the routes fake for the Disable phase.
 			h.routes.failAt = failAt
 
-			if err := h.svc.Disable(context.Background()); err != nil {
+			if err := h.svc.disable(context.Background()); err != nil {
 				t.Fatalf("Disable must push through best-effort errors, got: %v", err)
 			}
 
@@ -1426,7 +1426,7 @@ func TestDisableFakeIPTun_RejectAddFailKeepsAutoRoute(t *testing.T) {
 	h.routes.failAt = "AddRejectRoute"
 
 	const ndmsName = "OpkgTun0"
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable must push through, got: %v", err)
 	}
 
@@ -1468,7 +1468,7 @@ func TestDisableFakeIPTun_NotProvisioned(t *testing.T) {
 	}
 	h.log.calls = nil
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable (not provisioned): %v", err)
 	}
 
@@ -1505,7 +1505,7 @@ func TestDisableFakeIPTun_DisablesSlotFakeIPNotSlotRouter(t *testing.T) {
 		t.Fatal("precondition: SlotRouter must be disabled after Enable (XOR)")
 	}
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
 
@@ -1540,7 +1540,7 @@ func TestDisableFakeIPTun_DispatchOnRawModeDespiteNormalizeError(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
 
@@ -1581,7 +1581,7 @@ func TestDisable_TproxyUnchanged(t *testing.T) {
 	})
 	_ = uninstalled
 
-	if err := svc.Disable(context.Background()); err != nil {
+	if err := svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable (tproxy): %v", err)
 	}
 	if len(log.calls) != 0 {
@@ -1622,7 +1622,7 @@ func TestEnableFakeIPTun_NilDepsFailFast(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newFakeIPEnableHarness(t, "")
 			tc.nilf(h.svc)
-			err := h.svc.Enable(context.Background())
+			err := h.svc.enable(context.Background())
 			if err == nil {
 				t.Fatalf("expected error when %s is nil", tc.name)
 			}
@@ -1652,7 +1652,7 @@ func TestReconcileFakeIPTun_NoReprovision(t *testing.T) {
 
 	// First Reconcile: Enabled=false initially → nothing. We must first Enable so
 	// settings.Enabled flips true and the index is provisioned.
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	createCount1 := countCalls(h.log, "Create:OpkgTun0:private")
@@ -1684,7 +1684,7 @@ func TestFakeIPTun_PermitACL_EnableSetsDisableRemoves(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 	_ = captureDrain(t)
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	ia, ib := h.log.idxOf("Create:OpkgTun0:private"), h.log.idxOf("SetPermitACL:OpkgTun0")
@@ -1697,7 +1697,7 @@ func TestFakeIPTun_PermitACL_EnableSetsDisableRemoves(t *testing.T) {
 
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
 	h.log.calls = nil
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
 	if !h.log.has("RemovePermitACL:OpkgTun0") {
@@ -1710,7 +1710,7 @@ func TestFakeIPTun_PermitACL_EnableSetsDisableRemoves(t *testing.T) {
 func TestFakeIPTun_PermitACL_FailureRollsBack(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "SetPermitACL")
 
-	if err := h.svc.Enable(context.Background()); err == nil {
+	if err := h.svc.enable(context.Background()); err == nil {
 		t.Fatal("expected Enable to fail on permit-ACL error")
 	}
 	if !h.log.has("RemovePermitACL:OpkgTun0") || !h.log.has("Delete:OpkgTun0") {
@@ -1740,7 +1740,7 @@ func TestReapOrphaned_ScanRemovesPermitACL(t *testing.T) {
 // (upgrade-путь: fakeip включён более старой версией без ACL).
 func TestReconcileFakeIPTun_PermitACL_AssertedOnce(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
@@ -1763,7 +1763,7 @@ func TestReconcileFakeIPTun_PermitACL_AssertedOnce(t *testing.T) {
 // успеха, следующий тик ретраит (ревью: медленный RCI на буте).
 func TestReconcileFakeIPTun_PermitACL_RetriedAfterFailure(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
@@ -1797,7 +1797,7 @@ func TestEnableFakeIPTun_RefreshesAWGOutbounds(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 	called := 0
 	h.svc.deps.AWGOutboundsRefresh = func(ctx context.Context) error { called++; return nil }
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(fakeip-tun): %v", err)
 	}
 	if called == 0 {
@@ -1828,7 +1828,7 @@ func TestEnableFakeIPTun_RollbackOnSlotRouterFlipFailure(t *testing.T) {
 	}
 	h.svc.deps.Orch = orch
 
-	if err := h.svc.Enable(context.Background()); err == nil {
+	if err := h.svc.enable(context.Background()); err == nil {
 		t.Fatal("expected error when SlotRouter flip fails")
 	}
 
@@ -1854,7 +1854,7 @@ func TestEnableFakeIPTun_RollbackOnSlotRouterFlipFailure(t *testing.T) {
 func TestUpdateSettings_StackReachesOverlay(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 	ctx := context.Background()
-	if err := h.svc.Enable(ctx); err != nil {
+	if err := h.svc.enable(ctx); err != nil {
 		t.Fatalf("Enable(fakeip): %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{h.loadFakeIP(t).Index: true}}
@@ -1909,7 +1909,7 @@ func TestUpdateSettings_StackReachesOverlay(t *testing.T) {
 func TestUpdateSettings_CacheFileLocationReachesOverlayAndBase(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 	ctx := context.Background()
-	if err := h.svc.Enable(ctx); err != nil {
+	if err := h.svc.enable(ctx); err != nil {
 		t.Fatalf("Enable(fakeip): %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{h.loadFakeIP(t).Index: true}}

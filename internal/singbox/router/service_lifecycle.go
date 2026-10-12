@@ -751,13 +751,13 @@ func cleanValidateError(err error) string {
 	return strings.TrimSpace(msg)
 }
 
-// Enable is the USER-INITIATED router enable (HTTP handler + SwitchRoutingMode).
+// enable is the USER-INITIATED router enable (SwitchRoutingMode).
 // It clears the sticky master-stop intent — an explicit enable is an explicit
 // intent to run sing-box, which must override a prior master-Stop — then runs
 // the idempotent provisioning. Drift-heal (Reconcile / reconcileFakeIPTun) must
 // NOT clear the intent (the watchdog must respect a user's manual stop and not
 // resurrect the daemon on drift), so it calls enableLocked(ctx, false) instead.
-func (s *ServiceImpl) Enable(ctx context.Context) error {
+func (s *ServiceImpl) enable(ctx context.Context) error {
 	return s.enableLocked(ctx, true)
 }
 
@@ -1797,7 +1797,7 @@ func (s *ServiceImpl) GetStatus(ctx context.Context) (Status, error) {
 	}, nil
 }
 
-func (s *ServiceImpl) Disable(ctx context.Context) error {
+func (s *ServiceImpl) disable(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -2002,7 +2002,7 @@ func (s *ServiceImpl) Reconcile(ctx context.Context) error {
 		// do not clear the sticky intent (clearManualStop=false).
 		return s.enableLocked(ctx, false)
 	case !sr.Enabled && installedAny:
-		return s.Disable(ctx)
+		return s.disable(ctx)
 	case sr.Enabled && installedComplete:
 		return s.reconcileInstalled(ctx, sr)
 	}
@@ -2077,7 +2077,7 @@ func (s *ServiceImpl) reconcileInstalled(ctx context.Context, sr storage.Singbox
 			// удалена. Fail-safe disable, no auto-recovery; причина — в журнал.
 			s.appLog.Warn("reconcile", sr.PolicyName,
 				"политика не найдена в NDMS — движок маршрутизации выключается (fail-safe)")
-			return s.Disable(ctx)
+			return s.disable(ctx)
 		}
 		s.ensurePolicyWAN(ctx, sr, s.runningConfigLines(ctx, "tproxy"))
 	}

@@ -34,7 +34,7 @@ func TestPolicyTunEnable_SkipsForeignPin(t *testing.T) {
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true, 1: true, 2: true}}
 	h.svc.deps.OpkgTunPool = testOpkgTunPool(h.svc, foreignPins(3))
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 
@@ -57,7 +57,7 @@ func TestPolicyTunEnable_OwnHoldSurvivesForeignPins(t *testing.T) {
 		t.Fatalf("SetOpkgTunState: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 
@@ -77,7 +77,7 @@ func TestPolicyTunEnable_FailsClosedOnOccupancyError(t *testing.T) {
 		},
 	})
 
-	if err := h.svc.Enable(context.Background()); err == nil {
+	if err := h.svc.enable(context.Background()); err == nil {
 		t.Fatal("сбой поставщика занятости обязан останавливать включение")
 	}
 }
@@ -211,7 +211,7 @@ func TestPolicyTunEnable_HandoverKeepsNumberWhenRemoved(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 	if st := h.loadPolicyTun(t); st == nil || st.Index != 4 {
@@ -232,7 +232,7 @@ func TestPolicyTunEnable_HandoverMovesWhenForeignProven(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 	if st := h.loadPolicyTun(t); st == nil || st.Index == 4 {
@@ -250,7 +250,7 @@ func TestFakeIPEnable_DeadOwnIfaceKeepsNumber(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(fakeip-tun): %v", err)
 	}
 	if st := h.loadFakeIP(t); st == nil || st.Index != 5 {
@@ -311,7 +311,7 @@ func TestPolicyTunEnable_WarnsWhenHandoverChangesIndex(t *testing.T) {
 		t.Fatalf("SetOpkgTunState: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(policy-tun): %v", err)
 	}
 
@@ -343,7 +343,7 @@ func TestFakeIPTunEnable_WarnsWhenHandoverChangesIndex(t *testing.T) {
 		t.Fatalf("SetOpkgTunState: %v", err)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable(fakeip-tun): %v", err)
 	}
 
@@ -369,14 +369,14 @@ func TestEnableRefusesWithoutOpkgTunPool(t *testing.T) {
 	t.Run("policy-tun", func(t *testing.T) {
 		h := newPolicyTunEnableHarness(t, "")
 		h.svc.deps.OpkgTunPool = nil
-		if err := h.svc.Enable(context.Background()); err == nil {
+		if err := h.svc.enable(context.Background()); err == nil {
 			t.Fatal("ждали отказ: пул номеров не проведён")
 		}
 	})
 	t.Run("fakeip-tun", func(t *testing.T) {
 		h := newFakeIPEnableHarness(t, "")
 		h.svc.deps.OpkgTunPool = nil
-		if err := h.svc.Enable(context.Background()); err == nil {
+		if err := h.svc.enable(context.Background()); err == nil {
 			t.Fatal("ждали отказ: пул номеров не проведён")
 		}
 	})

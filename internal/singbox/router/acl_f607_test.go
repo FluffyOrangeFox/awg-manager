@@ -173,12 +173,12 @@ func TestEnable_PermitACL_OneRunningConfigRead(t *testing.T) {
 	}{
 		{"policy-tun", func(t *testing.T) (func() error, OpkgTunProvisioner, func(OpkgTunProvisioner)) {
 			h := newPolicyTunEnableHarness(t, "")
-			return func() error { return h.svc.Enable(context.Background()) }, h.svc.deps.OpkgTun,
+			return func() error { return h.svc.enable(context.Background()) }, h.svc.deps.OpkgTun,
 				func(p OpkgTunProvisioner) { h.svc.deps.OpkgTun = p }
 		}},
 		{"fakeip", func(t *testing.T) (func() error, OpkgTunProvisioner, func(OpkgTunProvisioner)) {
 			h := newFakeIPEnableHarness(t, "")
-			return func() error { return h.svc.Enable(context.Background()) }, h.svc.deps.OpkgTun,
+			return func() error { return h.svc.enable(context.Background()) }, h.svc.deps.OpkgTun,
 				func(p OpkgTunProvisioner) { h.svc.deps.OpkgTun = p }
 		}},
 	} {
@@ -208,7 +208,7 @@ func TestReconcileFakeIPTun_PermitACLAssert_NoResendBounded(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
 	m := newACLModel("OpkgTun0")
 	h.svc.deps.OpkgTun = withRealACL(t, h.svc.deps.OpkgTun, m)
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
@@ -247,7 +247,7 @@ func TestPermitACL_ForeignRuleOnly_PermitOnceNoDuplicate(t *testing.T) {
 	m.seed(f607HeaderV4, "permit tcp 10.77.0.2 255.255.255.255 0.0.0.0 0.0.0.0")
 	m.seed(f607HeaderV6, "permit ipv6 2001:db8::/32 ::/0")
 	h.svc.deps.OpkgTun = withRealACL(t, h.svc.deps.OpkgTun, m)
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	if n := m.permits(); n != 2 {

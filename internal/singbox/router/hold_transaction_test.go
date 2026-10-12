@@ -113,7 +113,7 @@ func TestDisable_HoldsForeignReloadsUntilDone(t *testing.T) {
 		Orch:           orch,
 	})
 
-	if err := svc.Disable(context.Background()); err != nil {
+	if err := svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
 	if !foreignWritten {

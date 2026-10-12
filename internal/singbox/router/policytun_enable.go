@@ -13,7 +13,7 @@ import (
 // PUBLIC + `ip global` OpkgTun (so NDMS lists it as a policy exit) → addr/mtu/up
 // → write+start the router slot with a tun inbound → wait carrier → park the
 // NDMS default route on the tun → optional DSCP-only QoS netfilter. Called with
-// s.mu held by Enable.
+// s.mu held by enable.
 //
 // Structurally a sibling of enableFakeIPTun: same persist-before-create
 // invariant (the reap only sees orphans by persisted index), same LIFO rollback

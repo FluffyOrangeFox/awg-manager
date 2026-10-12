@@ -113,3 +113,27 @@ func TestWiring_CleanupFinalSaveOwnBudget(t *testing.T) {
 		t.Fatal("последнее сохранение уборки делит ctx со снятиями policy-tun")
 	}
 }
+
+// F623: перехват sb-router снимается при удалении пакета, и ДО CleanupAll — тот
+// первым шагом гасит sing-box, и до конца уборки трафик устройств политики
+// уходил бы в порты без слушателя. Пропавший или съехавший вниз вызов тесты
+// пакетов не заметят.
+// Мутации: убрать вызов → красный; перенести после CleanupAll → красный.
+func TestRunCleanup_ReleasesNetfilterBeforeCleanupAll(t *testing.T) {
+	src, err := os.ReadFile("cleanup.go")
+	if err != nil {
+		t.Fatalf("чтение cleanup.go: %v", err)
+	}
+	body := string(src)
+	release := strings.Index(body, "router.ReleaseNetfilterForRemoval(")
+	if release < 0 {
+		t.Fatal("runCleanup не снимает перехват sb-router: правила переживут удаление пакета")
+	}
+	cleanupAll := strings.Index(body, ".CleanupAll(")
+	if cleanupAll < 0 {
+		t.Fatal("вызов CleanupAll не найден — проверку надо переписать")
+	}
+	if release > cleanupAll {
+		t.Error("ReleaseNetfilterForRemoval стоит ПОСЛЕ CleanupAll: окно, когда перехват ведёт в остановленный sing-box")
+	}
+}

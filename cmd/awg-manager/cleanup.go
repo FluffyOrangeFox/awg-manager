@@ -209,6 +209,17 @@ func runCleanup(dataDir string) {
 
 	accessPolicySvc := accesspolicy.New(cleanupNDMSCommands.Policies, cleanupNDMSCommands.Interfaces, cleanupNDMSQueries, settingsStore, nil, ndmsquery.NewPolicyMarkStore(cleanupNDMSTransport, nil))
 
+	// Перехват sb-router живёт в ядре и переживает и остановку sing-box, и
+	// снос хука в prerm (F623). ДО CleanupAll: тот первым шагом гасит
+	// sing-box, и до конца уборки (до 60 с) трафик устройств политики уходил
+	// бы в порты без слушателя; так он эти секунды идёт мимо sing-box. Хук 50
+	// правил не вернёт: Uninstall удаляет их файлы. Свой бюджет — общий
+	// принадлежит CleanupAll.
+	fmt.Println("  Removing sb-router netfilter...")
+	nfCtx, nfCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer nfCancel()
+	router.ReleaseNetfilterForRemoval(nfCtx, router.Deps{AppLog: loggingService})
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 

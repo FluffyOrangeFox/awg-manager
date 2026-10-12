@@ -63,7 +63,7 @@ func healthyPolicyTunRC(ndmsName string) []string {
 // чистит лог — дальше в логе только то, что сделал reconcile.
 func provisionPolicyTunForReconcile(t *testing.T, h *policyTunEnableHarness) storage.SingboxRouterSettings {
 	t.Helper()
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable (provision for reconcile): %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
@@ -1352,7 +1352,7 @@ func TestGetStatus_PolicyTun(t *testing.T) {
 		t.Errorf("до провижининга имена интерфейса пусты, получено %q/%q", st0.PolicyTunIface, st0.PolicyTunNDMSName)
 	}
 
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.IPTables = errProbeIPTables()
@@ -1555,7 +1555,7 @@ func TestPolicyTun_EnableDisableResetStrikes(t *testing.T) {
 		h := newPolicyTunEnableHarness(t, "")
 		provisionPolicyTunForReconcile(t, h)
 		h.svc.policyTunRouteStrikes.Store(8)
-		if err := h.svc.Disable(context.Background()); err != nil {
+		if err := h.svc.disable(context.Background()); err != nil {
 			t.Fatalf("Disable: %v", err)
 		}
 		if got := h.svc.policyTunRouteStrikes.Load(); got != 0 {
@@ -1565,7 +1565,7 @@ func TestPolicyTun_EnableDisableResetStrikes(t *testing.T) {
 	t.Run("включение", func(t *testing.T) {
 		h := newPolicyTunEnableHarness(t, "")
 		h.svc.policyTunRouteStrikes.Store(8)
-		if err := h.svc.Enable(context.Background()); err != nil {
+		if err := h.svc.enable(context.Background()); err != nil {
 			t.Fatalf("Enable: %v", err)
 		}
 		if got := h.svc.policyTunRouteStrikes.Load(); got != 0 {
@@ -1630,7 +1630,7 @@ func TestGetStatus_PolicyTunUnboundNamesTargetPolicy(t *testing.T) {
 	h := newPolicyTunEnableHarness(t, "")
 	h.withPolicy(t, "Policy1")
 	h.svc.deps.XtDscpProbe = func(context.Context) bool { return false }
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.IPTables = errProbeIPTables()
@@ -1669,7 +1669,7 @@ func issueOfKind(issues []Issue, kind string) *Issue {
 func TestGetStatus_PolicyTunSourcePreserveIsApplied(t *testing.T) {
 	h := newPolicyTunEnableHarness(t, "")
 	h.svc.deps.XtDscpProbe = func(context.Context) bool { return false }
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
@@ -2156,7 +2156,7 @@ func TestReconcilePolicyTun_HealsExternalConfiguration(t *testing.T) {
 func TestPolicyTunEnable_WritesExternalConfiguration(t *testing.T) {
 	h := newPolicyTunEnableHarness(t, "")
 	h.svc.deps.Singbox.(*fakeSingbox).tunHotReload = true
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	if !policyTunInbound(t, h).ExternalConfiguration {
@@ -2396,7 +2396,7 @@ func TestReconcilePolicyTun_NoAddressHealWhenProbeFails(t *testing.T) {
 func TestApplyStaging_KeepsAppliedTunExternalConfiguration(t *testing.T) {
 	h := newPolicyTunEnableHarness(t, "")
 	h.svc.deps.Singbox.(*fakeSingbox).tunHotReload = true
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	if !policyTunInbound(t, h).ExternalConfiguration {

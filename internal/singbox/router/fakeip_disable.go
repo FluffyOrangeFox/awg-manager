@@ -58,7 +58,7 @@ var fakeIPScheduleDrain = func(removeReject func()) {
 }
 
 // disableFakeIPTun tears down the fakeip-tun path with leak-safe ordering and a
-// fail-closed drain. Called with s.mu held by Disable.
+// fail-closed drain. Called with s.mu held by disable.
 //
 // Drain model (stand-verified, Fix 2): the reject route is NOT a separate
 // interface-less blackhole — that form is rejected by NDMS ("no input"). It is a

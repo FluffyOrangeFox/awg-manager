@@ -434,7 +434,7 @@ func (o *Operator) IsRunning() (bool, int) { return o.proc.IsRunning() }
 func (o *Operator) Reload() error { return o.proc.Reload() }
 
 // Start cold-starts sing-box after validating the config.d. Public
-// version of the internal startAndWait — used by router.Service.Enable
+// version of the internal startAndWait — used by router.ServiceImpl.enable
 // when sing-box wasn't already running.
 func (o *Operator) Start() error {
 	_, err := o.startSpawned()

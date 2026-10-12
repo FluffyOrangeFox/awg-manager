@@ -133,7 +133,7 @@ func TestEnablePolicyTun_DeniesWANInPolicy(t *testing.T) {
 	h.svc.deps.RunningConfig = &fakeRunningConfig{lines: []string{
 		"ip policy Policy0", "    permit global PPPoE0", "!",
 	}}
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	if want := []string{"Policy0:PPPoE0"}; !reflect.DeepEqual(pol.denies, want) {
@@ -196,7 +196,7 @@ func TestEnableTProxy_PermitsWANInPolicy(t *testing.T) {
 	svc.deps.NetfilterPreflight = func(context.Context) error { return nil }
 	svc.deps.XtDscpProbe = func(context.Context) bool { return true }
 
-	_ = svc.Enable(context.Background())
+	_ = svc.enable(context.Background())
 	if want := []string{"Policy0:PPPoE0:0"}; !reflect.DeepEqual(pol.permits, want) {
 		t.Fatalf("permits = %v, want %v", pol.permits, want)
 	}
