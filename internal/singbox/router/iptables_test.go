@@ -65,6 +65,7 @@ func (f *fakeExec) runIP(_ context.Context, args ...string) error {
 
 func newFakeIPTables(fe *fakeExec) *IPTables {
 	return &IPTables{
+		v6:             nopV6{},
 		restoreNoflush: fe.restoreNoflush,
 		runIPTables:    fe.runIPTables,
 		runIPTablesOut: func(_ context.Context, _ ...string) (string, error) { return jumpsPresentDump(), nil },
@@ -1023,6 +1024,7 @@ func TestProbe(t *testing.T) {
 	// emits its PREROUTING jump, per table. err short-circuits to the error path.
 	mk := func(mangleChain, mangleJump, natChain, natJump bool, err error) *IPTables {
 		return &IPTables{
+			v6: nopV6{},
 			runIPTablesOut: func(_ context.Context, args ...string) (string, error) {
 				if err != nil {
 					return "", err
@@ -1085,6 +1087,7 @@ func TestProbe(t *testing.T) {
 	// AWGM-TPROXY must not match a longer chain name sharing its prefix.
 	t.Run("anchored jump match", func(t *testing.T) {
 		it := &IPTables{
+			v6: nopV6{},
 			runIPTablesOut: func(_ context.Context, args ...string) (string, error) {
 				out := "-P PREROUTING ACCEPT\n-N " + ChainName + "\n-N " + RedirectChain + "\n"
 				out += "-A PREROUTING -j " + ChainName + "-V2\n" // decoy: longer name
@@ -1804,6 +1807,7 @@ func TestInstall_PersistsPerTableRulesAndRunsCtClean(t *testing.T) {
 	var persisted [3]string
 	order := []string{}
 	it := &IPTables{
+		v6: nopV6{},
 		restoreNoflush: func(ctx context.Context, input string) error {
 			order = append(order, "restore")
 			return fe.restoreNoflush(ctx, input)

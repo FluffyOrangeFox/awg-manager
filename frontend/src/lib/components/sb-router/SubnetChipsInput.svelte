@@ -1,13 +1,20 @@
 <script lang="ts">
   import { m } from '$lib/i18n';
-  import { normalizeSubnet, parseSubnets, serializeSubnets } from '$lib/utils/subnets';
+  import { isIPv6Subnet, normalizeSubnet, parseSubnets, serializeSubnets } from '$lib/utils/subnets';
 
   interface Props {
     value: string;
     onChange: (next: string) => void;
     inputId?: string;
+    /**
+     * Принимать ли IPv6. Такие исключения действуют только при включённом
+     * перехвате IPv6, и бэкенд без него их отвергает — поэтому новую запись не
+     * берём сразу, с понятной причиной. Уже сохранённые IPv6-записи остаются
+     * видны (помечены как недействующие), чтобы их можно было убрать.
+     */
+    allowIPv6?: boolean;
   }
-  let { value, onChange, inputId }: Props = $props();
+  let { value, onChange, inputId, allowIPv6 = false }: Props = $props();
 
   // Оптимистичное локальное состояние (см. PortChipsInput): onChange сохраняет
   // асинхронно, value лагает. $effect ресинкает при внешнем изменении.
@@ -18,6 +25,7 @@
 
   let draft = $state('');
   let invalidValue = $state<string | null>(null);
+  let ipv6OffValue = $state<string | null>(null);
 
   function commitDraft() {
     const raw = draft.trim();
@@ -31,12 +39,17 @@
         invalidValue = p;
         return;
       }
+      if (!allowIPv6 && isIPv6Subnet(n)) {
+        ipv6OffValue = p;
+        return;
+      }
       if (seen.has(n)) continue;
       seen.add(n);
       additions.push(n);
     }
     draft = '';
     invalidValue = null;
+    ipv6OffValue = null;
     if (additions.length === 0) return;
     chips = [...chips, ...additions];
     onChange(serializeSubnets(chips));
@@ -58,7 +71,8 @@
 <div class="port-chips">
   <div class="chips-box">
     {#each chips as c (c)}
-      <span class="port-chip">
+      {@const inert = !allowIPv6 && isIPv6Subnet(c)}
+      <span class="port-chip" class:inert title={inert ? m.sb_router_chips_subnet_inert() : undefined}>
         {c}
         <button type="button" class="chip-x" onclick={() => remove(c)} aria-label={m.sb_router_chips_subnet_remove()}>✕</button>
       </span>
@@ -69,11 +83,15 @@
       type="text"
       bind:value={draft}
       onkeydown={onKeydown}
-      oninput={() => (invalidValue = null)}
+      oninput={() => {
+        invalidValue = null;
+        ipv6OffValue = null;
+      }}
       placeholder={m.sb_router_chips_subnet_placeholder()}
     />
   </div>
   {#if invalidValue !== null}<div class="port-error">{m.sb_router_chips_subnet_invalid({ value: invalidValue })}</div>{/if}
+  {#if ipv6OffValue !== null}<div class="port-error">{m.sb_router_chips_subnet_ipv6_off({ value: ipv6OffValue })}</div>{/if}
 </div>
 
 <style>
@@ -98,6 +116,11 @@
     font-size: 12.5px;
     font-family: var(--font-mono);
     color: var(--text-primary);
+  }
+  .port-chip.inert {
+    color: var(--text-muted);
+    text-decoration: line-through;
+    border-style: dashed;
   }
   .chip-x {
     background: transparent;

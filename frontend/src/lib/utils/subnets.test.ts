@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeSubnet, parseSubnets, serializeSubnets } from './subnets';
+import { isIPv6Subnet, normalizeSubnet, parseSubnets, serializeSubnets } from './subnets';
 
 describe('normalizeSubnet', () => {
   it('keeps valid CIDR', () => expect(normalizeSubnet('203.0.113.0/24')).toBe('203.0.113.0/24'));
@@ -22,6 +22,12 @@ describe('parseSubnets', () => {
   it('empty → []', () => expect(parseSubnets('')).toEqual([]));
   it('keeps both families and dedups IPv6 by case', () =>
     expect(parseSubnets('10.8.0.5, 2001:db8::/32 2001:DB8::/32')).toEqual(['10.8.0.5/32', '2001:db8::/32']));
+});
+
+describe('isIPv6Subnet', () => {
+  it('IPv6 CIDR', () => expect(isIPv6Subnet('2001:db8::/32')).toBe(true));
+  it('bare IPv6 promoted to /128', () => expect(isIPv6Subnet('2001:db8::1/128')).toBe(true));
+  it('IPv4 CIDR', () => expect(isIPv6Subnet('10.0.0.0/8')).toBe(false));
 });
 
 describe('serializeSubnets', () => {

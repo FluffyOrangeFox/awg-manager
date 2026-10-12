@@ -64,6 +64,9 @@ func (s *ServiceImpl) reconcileFakeIPTun(ctx context.Context, sr storage.Singbox
 		s.mu.Unlock()
 		if force {
 			s.deps.IPTables.Uninstall(ctx)
+			// То же для v6-слоя прежнего tproxy-режима: его цепочки и хук в
+			// fakeip не сверяет никто.
+			s.sweepV6(ctx)
 			s.mu.Lock()
 			s.netfilterStateKnown = true
 			s.mu.Unlock()

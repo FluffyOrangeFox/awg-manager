@@ -582,6 +582,17 @@ type ServiceImpl struct {
 	// общий сброс предупреждения после успешной установки заставлял бы писать
 	// о нём каждым тиком.
 	v6SkippedLogged string
+	// v6SpecErrLogged — так же дедуплицированная ошибка разбора исключений
+	// (порты, подсети) при сборке спека v6.
+	v6SpecErrLogged string
+	// v6KernelUnknown — установка правил или блокировки IPv6 оборвалась
+	// ошибкой: что из них осталось в ядре, неизвестно, а файлов правил на
+	// диске при этом может не быть (они пишутся после успешного restore).
+	// Без этого признака снос слоя (teardownV6) счёл бы, что сносить нечего.
+	v6KernelUnknown bool
+	// v6PortsReserved — порты v6-слоя уже убраны из эфемерного пула ядра
+	// (один раз за жизнь процесса, при первом включении перехвата IPv6).
+	v6PortsReserved bool
 	// v6OffSettled — при выключенном слое конфиг уже проверен и наших
 	// инбаундов в нём нет (см. healV6Inbounds).
 	v6OffSettled bool
@@ -607,6 +618,11 @@ type ServiceImpl struct {
 	bypassLastPopulate time.Time
 	bypassLastError    string
 	bypassMissingTags  []string
+	// bypass6Problem — отказ IPv6-половины последнего наполнения (набор
+	// AWGM-BYPASS6). Отдельно от bypassLastError: IPv4-набор при этом собран,
+	// и статус набора сбоем не становится — причина идёт в статус роутера
+	// предупреждением (bypass6Issue).
+	bypass6Problem atomic.Pointer[string]
 	// populateBypassSet — шов наполнения для тестов (nil = bypassset.Populate).
 	populateBypassSet func(ctx context.Context, tags []string) (bypassset.PopulateResult, error)
 	// teardownBypassSetFn — шов сноса набора для тестов (nil = реальный снос).

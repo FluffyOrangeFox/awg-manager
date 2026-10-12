@@ -18,6 +18,7 @@ import (
 // calls Probe() and the orched harness leaves IPTables nil, which would panic.
 func errProbeIPTables() *IPTables {
 	return &IPTables{
+		v6:             nopV6{},
 		runIPTables:    func(context.Context, ...string) error { return errors.New("no chain") },
 		runIPTablesOut: func(context.Context, ...string) (string, error) { return "", errors.New("no chain") },
 		// Швы ip: первотиковый свип (F22) зовёт Uninstall, а тот идёт в

@@ -23,6 +23,15 @@ export function normalizeSubnet(s: string): string | null {
   return null;
 }
 
+/**
+ * IPv6 ли это запись — по уже нормализованному значению. Такие исключения
+ * действуют только при включённом перехвате IPv6 (бэкенд без него их
+ * отвергает: checkV6SubnetsAccepted).
+ */
+export function isIPv6Subnet(normalized: string): boolean {
+  return normalized.includes(':');
+}
+
 /** Split по запятой/пробелу, normalize, dedup; невалидные молча отброшены. */
 export function parseSubnets(s: string): string[] {
   const out: string[] = [];

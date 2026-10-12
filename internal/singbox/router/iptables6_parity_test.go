@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"reflect"
 	"strings"
@@ -140,7 +141,7 @@ func TestBuildV6Spec_ParityInputs(t *testing.T) {
 		BypassGeoIPTags:    []string{"geoip:cn"},
 	}
 	topo := v6Topology{Bridges: []string{"br0"}}
-	spec, _ := buildV6Spec(sr, "0xffffaab", true, topo, []string{"nwg3", "br0"}, []string{"2001:db8:cd::1/128", "2001:db8:aa::/48"})
+	spec, _, _ := buildV6Spec(sr, "0xffffaab", true, topo, []string{"nwg3", "br0"}, []string{"2001:db8:cd::1/128", "2001:db8:aa::/48"})
 
 	// Рантайм-исключения (адреса KeenDNS) идут первыми, пользовательские — за
 	// ними, дубль между списками схлопывается; IPv4-запись сюда не попадает.
@@ -155,25 +156,105 @@ func TestBuildV6Spec_ParityInputs(t *testing.T) {
 	}
 }
 
-// Сброс потоков: в режиме политики — по connmark политики (десятичной), в
-// режиме «все устройства» — все UDP-записи IPv6. Неразбираемая метка — отказ,
-// а не снос всего подряд.
-func TestEvictArgs6(t *testing.T) {
-	args, ok := evictArgs6(V6Spec{PolicyMark: "0xffffaab"})
-	if !ok || !reflect.DeepEqual(args, []string{"-D", "-f", "ipv6", "-p", "udp", "--mark", "268434091"}) {
-		t.Errorf("политика: %v, %v", args, ok)
+// Скрипт чистки потоков исполняется на живом роутере после каждой установки
+// правил и из хука — синтаксическая ошибка ломала бы обе.
+func TestCtClean6Script_ValidShellAndScope(t *testing.T) {
+	script := ctClean6Script()
+	cmd := exec.Command("sh", "-n")
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("сгенерированный скрипт — невалидный sh: %v\n%s", err, out)
 	}
-	args, ok = evictArgs6(V6Spec{MatchAll: true})
-	if !ok || !reflect.DeepEqual(args, []string{"-D", "-f", "ipv6", "-p", "udp"}) {
-		t.Errorf("все устройства: %v, %v", args, ok)
+	// Без живого джампа скрипт не делает ничего: ни сброса ускорения (потоки
+	// переучились бы через ту же дыру), ни сноса записей.
+	gate := indexOf(t, script, `[ -n "$jumps" ] || exit 0`)
+	flush := indexOf(t, script, "echo 1 > /proc/sys/net/hwnat/ppe_flush")
+	evict := indexOf(t, script, `"$CT" -D -f ipv6 -p udp`)
+	if !(gate < flush && flush < evict) {
+		t.Errorf("порядок: гейт по джампу → сброс ускорения → снос записей:\n%s", script)
 	}
-	if _, ok := evictArgs6(V6Spec{PolicyMark: "мусор"}); ok {
-		t.Error("неразбираемая метка обязана давать отказ")
+	for _, want := range []string{
+		// Политика: отбор в ядре по connmark политики (десятичной).
+		`"$CT" -D -f ipv6 -p udp --mark "$pmark"`,
+		`pmark="$(printf '%d' "$pmark" 2>/dev/null)"`,
+		"-[jg] " + Chain6Name + "($| )",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("в скрипте нет %q:\n%s", want, script)
+		}
+	}
+	if strings.Contains(script, "-p tcp") {
+		t.Errorf("TCP-потоки сносить нельзя:\n%s", script)
+	}
+}
+
+// Режим «все устройства»: метки нет, и сносить ВСЕ UDP-записи IPv6 нельзя —
+// под снос попали бы собственные потоки роутера и соединения, открытые
+// снаружи. Отбор идёт по полю mac=, как в v4-скрипте: Keenetic пишет его
+// только на потоках, начатых устройством LAN.
+func TestCtClean6Script_MatchAllScopedByMAC(t *testing.T) {
+	script := ctClean6Script()
+	for _, want := range []string{
+		`$1 == "ipv6" && $3 == "udp"`,
+		`else if ($i ~ /^mac=/) hasmac = 1;`,
+		`if (hasmac && src != "" && dst != "" && sp != "" && dp != "") print src, dst, sp, dp;`,
+		`"$CT" -D -f ipv6 -p udp -s "$s" -d "$d" --sport "$sp" --dport "$dp"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("в скрипте нет %q:\n%s", want, script)
+		}
+	}
+	// Вызова без отбора быть не должно ни в одной ветке.
+	for _, line := range strings.Split(script, "\n") {
+		if !strings.Contains(line, `"$CT" -D`) {
+			continue
+		}
+		if !strings.Contains(line, "--mark") && !strings.Contains(line, "--sport") {
+			t.Errorf("снос записей без отбора: %q", line)
+		}
+	}
+}
+
+// Отбор по mac= на строках в формате /proc/net/nf_conntrack Keenetic (набор и
+// порядок полей сняты с KN-1811, KeeneticOS 5.2; адреса и MAC синтетические):
+// запись устройства LAN попадает под снос, запись без mac= (собственный поток
+// роутера) и запись IPv4 — нет.
+func TestCtClean6Script_AwkSelectsLANFlows(t *testing.T) {
+	if _, err := exec.LookPath("awk"); err != nil {
+		t.Skip("awk недоступен")
+	}
+	script := ctClean6Script()
+	start := strings.Index(script, "awk '")
+	end := strings.Index(script, "}' /proc/net/nf_conntrack")
+	if start < 0 || end < 0 {
+		t.Fatalf("в скрипте не найдена awk-программа:\n%s", script)
+	}
+	prog := script[start+len("awk '") : end+1]
+	// printf-шаблон скрипта уже раскрыт — `%%` в программе быть не должно.
+	if strings.Contains(prog, "%") {
+		t.Fatalf("в awk-программе остался символ форматирования:\n%s", prog)
+	}
+	input := strings.Join([]string{
+		"ipv6     10 udp      17 169 src=fe80:0000:0000:0000:0200:5eff:fe00:5310 dst=fe80:0000:0000:0000:0200:5eff:fe00:5301 sport=62501 dport=53 packets=20 bytes=1856 src=fe80:0000:0000:0000:0200:5eff:fe00:5301 dst=fe80:0000:0000:0000:0200:5eff:fe00:5310 sport=53 dport=62501 packets=20 bytes=7310 [ASSURED] mark=268434091 nmark=0 sc=0 ifl=31 mac=00:00:5e:00:53:10 slan attrs= use=2",
+		"ipv6     10 udp      17 20 src=2001:0db8:0000:0000:0000:0000:0000:0001 dst=2001:0db8:0000:0000:0000:0000:0000:0002 sport=40000 dport=123 packets=1 bytes=76 src=2001:0db8:0000:0000:0000:0000:0000:0002 dst=2001:0db8:0000:0000:0000:0000:0000:0001 sport=123 dport=40000 packets=1 bytes=76 mark=0 nmark=0 sc=0 use=2",
+		"ipv4     2 udp      17 30 src=192.0.2.10 dst=1.1.1.1 sport=5000 dport=53 packets=1 bytes=60 src=1.1.1.1 dst=192.0.2.10 sport=53 dport=5000 packets=1 bytes=60 mark=0 mac=00:00:5e:00:53:10 use=2",
+		"ipv6     10 tcp      6 100 ESTABLISHED src=2001:0db8:0000:0000:0000:0000:0000:0003 dst=2001:0db8:0000:0000:0000:0000:0000:0004 sport=50000 dport=443 packets=5 bytes=500 src=2001:0db8:0000:0000:0000:0000:0000:0004 dst=2001:0db8:0000:0000:0000:0000:0000:0003 sport=443 dport=50000 packets=5 bytes=500 [ASSURED] mark=0 mac=00:00:5e:00:53:10 use=2",
+		"",
+	}, "\n")
+	cmd := exec.Command("awk", prog)
+	cmd.Stdin = strings.NewReader(input)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("awk: %v", err)
+	}
+	want := "fe80:0000:0000:0000:0200:5eff:fe00:5310 fe80:0000:0000:0000:0200:5eff:fe00:5301 62501 53\n"
+	if string(out) != want {
+		t.Errorf("отбор потоков:\n got %q\nwant %q", out, want)
 	}
 }
 
 // Хук: набор возвращается до ip6tables-restore, а после восстановления mangle
-// сбрасываются старые потоки — по метке из живого джампа или, без неё, все.
+// запускается скрипт чистки потоков — сам хук conntrack не трогает.
 func TestNetfilter6HookScript_SetAndEviction(t *testing.T) {
 	script := netfilter6HookScript()
 	cmd := exec.Command("sh", "-n")
@@ -187,19 +268,22 @@ func TestNetfilter6HookScript_SetAndEviction(t *testing.T) {
 	if !(create < restoreSet && restoreSet < restoreRules) {
 		t.Errorf("набор обязан вернуться до ip6tables-restore:\n%s", script)
 	}
-	for _, want := range []string{
-		`-D -f ipv6 -p udp --mark "$(printf '%d' "$pmark")"`,
-		`"$CT" -D -f ipv6 -p udp >/dev/null`,
-		"xt_dscp", "xt_set",
-	} {
+	for _, want := range []string{"xt_dscp", "xt_set"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("в хуке нет %q:\n%s", want, script)
 		}
 	}
+	clean := indexOf(t, script, `[ -x "/opt/etc/awg-manager/singbox/awgm-ctclean6.sh" ] && "/opt/etc/awg-manager/singbox/awgm-ctclean6.sh"`)
+	restoreMangle := indexOf(t, script, "ip6tables-restore --noflush < \"/opt/etc/awg-manager/singbox/router-netfilter6-mangle.rules\"")
+	restoreNat := indexOf(t, script, "scrub_jumps nat "+Redirect6Chain)
+	if !(restoreMangle < clean && clean < restoreNat) {
+		t.Errorf("чистка потоков обязана идти сразу после возврата mangle и только в его ветке:\n%s", script)
+	}
+	if strings.Contains(script, conntrackBinary) || strings.Contains(script, "ppe_flush") {
+		t.Errorf("хук не должен ни звать conntrack, ни сбрасывать ускорение сам — это дело скрипта чистки:\n%s", script)
+	}
 }
 
-// IPv6-пара инбаундов класса QoS появляется только при V6 и без привязки к
-// интерфейсу; теги остаются в зарезервированном пространстве qos-*.
 func TestEnsureQoSInbounds_V6Pair(t *testing.T) {
 	classes := activeQoSClasses([]storage.SingboxQoSClass{{DSCP: 46, Outbound: "vpn", Enabled: true, Slot: 2}})
 	v4only, _ := ensureQoSInbounds(nil, classes, "", 0)
@@ -310,18 +394,6 @@ func TestV6ListenPorts_NoCollisions(t *testing.T) {
 	}
 }
 
-// Аппаратное ускорение: после восстановления mangle хук сбрасывает таблицу
-// PPE — соединения, установленные до правил, идут мимо netfilter, и без сброса
-// ни правила, ни снос conntrack их не возвращают.
-func TestNetfilter6HookScript_FlushesOffload(t *testing.T) {
-	script := netfilter6HookScript()
-	flush := indexOf(t, script, "[ -w /proc/sys/net/hwnat/ppe_flush ] && echo 1 > /proc/sys/net/hwnat/ppe_flush")
-	restore := indexOf(t, script, "ip6tables-restore --noflush")
-	if flush < restore {
-		t.Errorf("сброс ускорения обязан идти после возврата правил:\n%s", script)
-	}
-}
-
 // Аплинки берутся из маршрутов по умолчанию всех таблиц; lo — не аплинк (через
 // него идёт наш же `local ::/0` таблицы TPROXY и недостижимые заглушки ядра).
 func TestParseIPv6DefaultIfaces(t *testing.T) {
@@ -341,11 +413,11 @@ func TestParseIPv6DefaultIfaces(t *testing.T) {
 // джампы привязаны к мостам, и отсекать нечего. Источники — наоборот.
 func TestBuildV6Spec_UplinksOnlyInMatchAll(t *testing.T) {
 	topo := v6Topology{Bridges: []string{"br0"}, Uplinks: []string{"ppp0"}}
-	all, _ := buildV6Spec(storage.SingboxRouterSettings{}, "", false, topo, []string{"nwg3"}, nil)
+	all, _, _ := buildV6Spec(storage.SingboxRouterSettings{}, "", false, topo, []string{"nwg3"}, nil)
 	if !all.MatchAll || !reflect.DeepEqual(all.Uplinks, []string{"ppp0"}) || len(all.IngressInterfaces) != 0 {
 		t.Errorf("все устройства: %+v", all)
 	}
-	pol, _ := buildV6Spec(storage.SingboxRouterSettings{}, "0xffffaab", true, topo, []string{"nwg3"}, nil)
+	pol, _, _ := buildV6Spec(storage.SingboxRouterSettings{}, "0xffffaab", true, topo, []string{"nwg3"}, nil)
 	if pol.MatchAll || len(pol.Uplinks) != 0 || !reflect.DeepEqual(pol.IngressInterfaces, []string{"nwg3"}) {
 		t.Errorf("политика: %+v", pol)
 	}
@@ -422,6 +494,10 @@ func TestInstallAndRemoveBlackhole6(t *testing.T) {
 	if fe.blackholeWrites != 1 || fe.hookWrites != 1 {
 		t.Errorf("blackholeWrites=%d hookWrites=%d, want 1, 1", fe.blackholeWrites, fe.hookWrites)
 	}
+	// Файл правил и хук — только после успешного restore.
+	if want := []string{"restore", "blackhole", "hook"}; !reflect.DeepEqual(fe.events, want) {
+		t.Errorf("порядок установки блокировки: %v, want %v", fe.events, want)
+	}
 	if len(fe.ip) != 0 {
 		t.Errorf("блокировке не нужны ни правило маршрутизации, ни маршрут: %v", fe.ip)
 	}
@@ -436,6 +512,19 @@ func TestInstallAndRemoveBlackhole6(t *testing.T) {
 	newV6IPTables(fe2).Uninstall6(context.Background())
 	if fe2.blackholeCleanups != 1 {
 		t.Errorf("Uninstall6 обязан снимать блокировку: cleanups=%d", fe2.blackholeCleanups)
+	}
+}
+
+// Блокировка, которую ядро отвергло, на диск не попадает: DEAD-ветка хука
+// иначе применяла бы тот же отвергнутый спек на каждой перестройке файрвола.
+func TestInstallBlackhole6_RestoreError_NoFiles(t *testing.T) {
+	fe := &v6Exec{restoreErr: errors.New("line 2 failed")}
+	it := newV6IPTables(fe)
+	if err := it.InstallBlackhole6(context.Background(), testV6Spec()); err == nil {
+		t.Fatal("ошибка ip6tables-restore обязана уйти наверх")
+	}
+	if fe.blackholeWrites != 0 || fe.hookWrites != 0 {
+		t.Errorf("после провала restore на диск писать нельзя: blackhole=%d hook=%d", fe.blackholeWrites, fe.hookWrites)
 	}
 }
 

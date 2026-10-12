@@ -80,6 +80,7 @@ func TestDisable_HoldsForeignReloadsUntilDone(t *testing.T) {
 	midTransaction := 0
 	foreignWritten := false
 	ipt := &IPTables{
+		v6:             nopV6{},
 		runIPTablesOut: func(_ context.Context, _ ...string) (string, error) { return "", nil },
 		runIPTables: func(_ context.Context, _ ...string) error {
 			if !foreignWritten {

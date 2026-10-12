@@ -1,0 +1,17 @@
+{
+  "name": "myrouter",
+  "booked": "myrouter",
+  "domain": "keenetic.pro",
+  "address": "",
+  "address6": "",
+  "updated": true,
+  "access": "",
+  "access6": "",
+  "xns": "redacted",
+  "ttp": {
+    "direct": false,
+    "interface": "ISP",
+    "address": "198.51.100.7",
+    "address6": "2001:db8::7"
+  }
+}

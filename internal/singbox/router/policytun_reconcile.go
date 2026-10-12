@@ -652,6 +652,14 @@ func (s *ServiceImpl) reconcilePolicyTunQoS(ctx context.Context, sr storage.Sing
 			"цепочки DSCP-диспатча пропали при неизменных классах — переустанавливаем")
 	}
 
+	// v6-слой прежнего tproxy-режима: в policy-tun его нет вовсе, а цепочки и
+	// хук переживают рестарт демона. Свип на первой сверке и при каждом сносе
+	// v4-правил — а не только в ветке `want == nil`: при активных классах QoS
+	// та ветка не достигается, и сирота жила бы до выключения режима.
+	if force || want == nil {
+		s.sweepV6(ctx)
+	}
+
 	if want == nil {
 		s.deps.IPTables.Uninstall(ctx)
 		// Тот же выход из режима, что и в policy-tun-Disable, — и тот же снос

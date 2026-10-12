@@ -770,6 +770,7 @@ func TestGetStatus_FakeIPMode_ReadsFakeIPSlot(t *testing.T) {
 
 	// Wire IPTables stub so Probe() doesn't panic (errProbeIPTables pattern).
 	svc.deps.IPTables = &IPTables{
+		v6:             nopV6{},
 		runIPTables:    func(context.Context, ...string) error { return errors.New("no chain") },
 		runIPTablesOut: func(context.Context, ...string) (string, error) { return "", errors.New("no chain") },
 	}

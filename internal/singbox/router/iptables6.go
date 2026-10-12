@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -98,6 +99,8 @@ var (
 	// bypassSave6Path — дамп `ipset save` набора AWGM-BYPASS6: по нему v6-хук
 	// возвращает набор после перезагрузки роутера, до ip6tables-restore.
 	bypassSave6Path = "/opt/etc/awg-manager/singbox/bypass6.ipset"
+	// netfilterCtClean6Path — скрипт чистки потоков v6-слоя (ctClean6Script).
+	netfilterCtClean6Path = "/opt/etc/awg-manager/singbox/awgm-ctclean6.sh"
 )
 
 // netfilter6HookName — имя v6-хука. Лежит рядом с v4-хуком: каталог берётся у
@@ -544,14 +547,25 @@ func v6BridgesFor(names []string) (bridges []V6Bridge, skipped []string) {
 // рантайм-исключения по адресам (сейчас это IPv6-адреса KeenDNS с роутера).
 // Классы QoS сюда не входят: их проекцию вызывающий дописывает в спек после
 // проверки xt_dscp — той же, что гейтит классы в v4.
-func buildV6Spec(sr storage.SingboxRouterSettings, mark string, policyMode bool, topo v6Topology, ingress, adhoc []string) (V6Spec, []string) {
+//
+// Ошибка — нечитаемые исключения (порты, подсети). Спек при этом всё равно
+// собран, без нечитаемой части: перехват важнее исключения, а что с ошибкой
+// делать, решает вызывающий.
+func buildV6Spec(sr storage.SingboxRouterSettings, mark string, policyMode bool, topo v6Topology, ingress, adhoc []string) (V6Spec, []string, error) {
 	bridges, skipped := v6BridgesFor(topo.Bridges)
-	bypassUDP, bypassTCP, _ := resolveBypassPorts(sr.BypassPresets, sr.BypassExtraPorts)
+	bypassUDP, bypassTCP, portsErr := resolveBypassPorts(sr.BypassPresets, sr.BypassExtraPorts)
+	if portsErr != nil {
+		portsErr = fmt.Errorf("порты: %w", portsErr)
+	}
 	// Порядок и дедуп — как у resolveBypassCIDRs: сперва рантайм-исключения,
 	// затем пользовательский список.
 	var bypassCIDRs []string
 	seen := map[string]bool{}
-	user, _ := resolveBypassSubnets6(sr.BypassExtraSubnets)
+	user, subnetsErr := resolveBypassSubnets6(sr.BypassExtraSubnets)
+	if subnetsErr != nil {
+		subnetsErr = fmt.Errorf("подсети: %w", subnetsErr)
+	}
+	specErr := errors.Join(portsErr, subnetsErr)
 	for _, c := range append(append([]string{}, adhoc...), user...) {
 		if !seen[c] {
 			seen[c] = true
@@ -572,7 +586,7 @@ func buildV6Spec(sr storage.SingboxRouterSettings, mark string, policyMode bool,
 		// «Все устройства»: джамп не привязан к интерфейсу, и отдельный список
 		// источников не нужен — туннели попадают в перехват сами, как в v4.
 		spec.Uplinks = topo.Uplinks
-		return spec, skipped
+		return spec, skipped, specErr
 	}
 	// Источник, оказавшийся мостом, уже покрыт его собственными правилами.
 	isBridge := make(map[string]bool, len(topo.Bridges))
@@ -584,7 +598,7 @@ func buildV6Spec(sr storage.SingboxRouterSettings, mark string, policyMode bool,
 			spec.IngressInterfaces = append(spec.IngressInterfaces, name)
 		}
 	}
-	return spec, skipped
+	return spec, skipped, specErr
 }
 
 // ---- инбаунды sing-box ---------------------------------------------------
@@ -676,29 +690,101 @@ func v6BridgeInbounds(spec V6Spec) bool {
 
 // ---- установка и снос ----------------------------------------------------
 
-// hasV6 сообщает, подключены ли швы v6-слоя. В тестовых сборках IPTables,
-// которые заполняют только v4-поля, слой молча выключен.
-func (it *IPTables) hasV6() bool {
-	return it != nil && it.restoreNoflush6 != nil && it.runIP6Tables != nil && it.runIP6TablesOut != nil
+// v6Backend — всё, чем v6-слой трогает систему: ip6tables, файлы правил и
+// хука, чистка потоков. Интерфейсом, а не набором полей-функций: реализацию
+// нельзя собрать наполовину (тип без метода не компилируется), и у слоя нет
+// состояния «зависимости подключены не все», которое пришлось бы проверять во
+// время работы.
+type v6Backend interface {
+	// Restore — `ip6tables-restore --noflush`.
+	Restore(ctx context.Context, input string) error
+	// Run / RunOutput — одиночный вызов ip6tables.
+	Run(ctx context.Context, args ...string) error
+	RunOutput(ctx context.Context, args ...string) (string, error)
+	// PersistRules пишет файлы правил перехвата (общий и по таблицам).
+	PersistRules(combined, mangle, nat string) error
+	// PersistHook пишет хук netfilter.d и скрипт чистки потоков.
+	PersistHook() error
+	// RemoveFiles удаляет файлы правил, хук и скрипт чистки.
+	RemoveFiles()
+	// CleanFlows запускает скрипт чистки потоков (ctClean6Script).
+	CleanFlows(ctx context.Context)
+	// PersistBlackhole / RemoveBlackholeFile — файл правил блокировки.
+	PersistBlackhole(input string) error
+	RemoveBlackholeFile()
 }
 
-// Install6 ставит v6-правила. Порядок тот же, что у Install: снять прежние
-// джампы, записать файлы для хука, применить, добавить правило и маршрут.
+// systemV6 — боевая реализация v6Backend.
+type systemV6 struct{}
+
+func (systemV6) Restore(ctx context.Context, input string) error {
+	return sysiptables.RestoreNoflush6(ctx, input)
+}
+
+func (systemV6) Run(ctx context.Context, args ...string) error {
+	return sysiptables.Run6(ctx, args...)
+}
+
+func (systemV6) RunOutput(ctx context.Context, args ...string) (string, error) {
+	return sysiptables.RunOutput6(ctx, args...)
+}
+
+func (systemV6) PersistRules(combined, mangle, nat string) error {
+	if err := storage.AtomicWritePerm(netfilter6RulesPath, []byte(combined), 0644); err != nil {
+		return err
+	}
+	if err := storage.AtomicWritePerm(netfilter6MangleRulesPath, []byte(mangle), 0644); err != nil {
+		return err
+	}
+	return storage.AtomicWritePerm(netfilter6NatRulesPath, []byte(nat), 0644)
+}
+
+func (systemV6) PersistHook() error {
+	if err := storage.AtomicWritePerm(netfilter6HookPath(), []byte(netfilter6HookScript()), 0755); err != nil {
+		return err
+	}
+	return storage.AtomicWritePerm(netfilterCtClean6Path, []byte(ctClean6Script()), 0755)
+}
+
+// RemoveFiles: после этого перестройка файрвола NDMS больше не возвращает
+// v6-перехват.
+func (systemV6) RemoveFiles() {
+	_ = os.Remove(netfilter6RulesPath)
+	_ = os.Remove(netfilter6MangleRulesPath)
+	_ = os.Remove(netfilter6NatRulesPath)
+	_ = os.Remove(netfilter6HookPath())
+	_ = os.Remove(netfilterCtClean6Path)
+}
+
+// CleanFlows best-effort: скрипт сам пишет в syslog, а отказ не должен ронять
+// установку — перехват уже поднят.
+func (systemV6) CleanFlows(ctx context.Context) {
+	_, _ = sysexec.Run(ctx, netfilterCtClean6Path)
+}
+
+func (systemV6) PersistBlackhole(input string) error {
+	return storage.AtomicWritePerm(netfilter6BlackholePath, []byte(input), 0644)
+}
+
+func (systemV6) RemoveBlackholeFile() { _ = os.Remove(netfilter6BlackholePath) }
+
+// Install6 ставит v6-правила: снять прежние джампы, применить, добавить
+// правило и маршрут, записать файлы для хука, вычистить старые потоки.
+//
+// Файлы правил и хук пишутся ПОСЛЕ успешного restore. В обратном порядке
+// отвергнутый ядром спек остался бы на диске, и хук применял бы его снова на
+// каждой перестройке файрвола. И после правила с маршрутом: если запись на
+// диск не удалась, перехват уже работает целиком (без них TPROXY-пакеты
+// некуда доставить), а ошибка уходит наверх и установка повторится.
+//
+// После ошибки состояние ядра неизвестно: restore коммитит по таблицам, и
+// часть правил могла примениться. Вызывающий обязан это помнить — файлов на
+// диске, по которым снос нашёл бы слой, при этом может не быть.
 func (it *IPTables) Install6(ctx context.Context, spec V6Spec) error {
 	it.removeJumps6(ctx)
 	mangle := buildMangleRestoreInput6(spec)
 	nat := buildNatRestoreInput6(spec)
-	if it.persistRules6 != nil {
-		if err := it.persistRules6(mangle+nat, mangle, nat); err != nil {
-			return fmt.Errorf("write v6 netfilter rules: %w", err)
-		}
-	}
-	if it.persistHook6 != nil {
-		if err := it.persistHook6(); err != nil {
-			return fmt.Errorf("write v6 netfilter hook: %w", err)
-		}
-	}
-	if err := it.restoreNoflush6(ctx, mangle+nat); err != nil {
+	if err := it.v6.Restore(ctx, mangle+nat); err != nil {
 		return fmt.Errorf("ip6tables-restore: %w", err)
 	}
 	it.drainFwmarkRules6(ctx)
@@ -715,28 +801,27 @@ func (it *IPTables) Install6(ctx context.Context, spec V6Spec) error {
 			return fmt.Errorf("ip -6 route add: %w", err)
 		}
 	}
-	// UDP-потоки, родившиеся до правил, несут в conntrack подмену адреса
-	// источника (маршрут политики мог вести через NAT): TPROXY доставляет их
-	// пакеты уже с подменённым источником, и sing-box отвечает не тому. Сносим
-	// записи политики — следующий пакет создаст поток заново, уже через правила.
-	if it.evictFlows6 != nil {
-		it.evictFlows6(ctx, spec)
+	if err := it.v6.PersistRules(mangle+nat, mangle, nat); err != nil {
+		return fmt.Errorf("write v6 netfilter rules: %w", err)
 	}
+	if err := it.v6.PersistHook(); err != nil {
+		return fmt.Errorf("write v6 netfilter hook: %w", err)
+	}
+	// Потоки, родившиеся до правил, идут мимо них — см. ctClean6Script.
+	it.v6.CleanFlows(ctx)
 	return nil
 }
 
 // Uninstall6 сносит v6-слой целиком. Идемпотентно и без ошибок — как
 // Uninstall.
 func (it *IPTables) Uninstall6(ctx context.Context) {
-	if it.cleanupHook6 != nil {
-		it.cleanupHook6()
-	}
+	it.v6.RemoveFiles()
 	it.RemoveBlackhole6(ctx)
 	it.removeJumps6(ctx)
-	_ = it.runIP6Tables(ctx, "-t", "mangle", "-F", Chain6Name)
-	_ = it.runIP6Tables(ctx, "-t", "mangle", "-X", Chain6Name)
-	_ = it.runIP6Tables(ctx, "-t", "nat", "-F", Redirect6Chain)
-	_ = it.runIP6Tables(ctx, "-t", "nat", "-X", Redirect6Chain)
+	_ = it.v6.Run(ctx, "-t", "mangle", "-F", Chain6Name)
+	_ = it.v6.Run(ctx, "-t", "mangle", "-X", Chain6Name)
+	_ = it.v6.Run(ctx, "-t", "nat", "-F", Redirect6Chain)
+	_ = it.v6.Run(ctx, "-t", "nat", "-X", Redirect6Chain)
 	it.drainFwmarkRules6(ctx)
 	// del, а не flush: таблица 100 в IPv6 содержит ровно один наш маршрут, а
 	// `ip -6 route flush table N` BusyBox-овский ip не умеет.
@@ -745,26 +830,23 @@ func (it *IPTables) Uninstall6(ctx context.Context) {
 }
 
 // InstallBlackhole6 поднимает fail-closed блокировку IPv6 — зеркало
-// InstallBlackhole: снять прежний джамп, записать правила (по ним DEAD-ветка
-// хука вернёт блокировку после перестройки файрвола, пока движок мёртв),
-// применить. Ни правила маршрутизации, ни fwmark: блокировка только дропает.
+// InstallBlackhole: снять прежний джамп, применить, записать правила (по ним
+// DEAD-ветка хука вернёт блокировку после перестройки файрвола, пока движок
+// мёртв). Ни правила маршрутизации, ни fwmark: блокировка только дропает.
+// Файл и хук — после успешного restore, по той же причине, что в Install6.
 func (it *IPTables) InstallBlackhole6(ctx context.Context, spec V6Spec) error {
 	it.removeJumps6FromTable(ctx, "mangle", Blackhole6Chain)
 	input := buildBlackholeRestoreInput6(spec)
-	if it.persistBlackhole6 != nil {
-		if err := it.persistBlackhole6(input); err != nil {
-			return fmt.Errorf("write v6 blackhole rules: %w", err)
-		}
+	if err := it.v6.Restore(ctx, input); err != nil {
+		return fmt.Errorf("ip6tables-restore blackhole: %w", err)
+	}
+	if err := it.v6.PersistBlackhole(input); err != nil {
+		return fmt.Errorf("write v6 blackhole rules: %w", err)
 	}
 	// Хук обязан существовать, иначе после перестройки файрвола блокировку
 	// вернуть некому. Обычно его уже записал Install6.
-	if it.persistHook6 != nil {
-		if err := it.persistHook6(); err != nil {
-			return fmt.Errorf("write v6 netfilter hook: %w", err)
-		}
-	}
-	if err := it.restoreNoflush6(ctx, input); err != nil {
-		return fmt.Errorf("ip6tables-restore blackhole: %w", err)
+	if err := it.v6.PersistHook(); err != nil {
+		return fmt.Errorf("write v6 netfilter hook: %w", err)
 	}
 	return nil
 }
@@ -772,12 +854,10 @@ func (it *IPTables) InstallBlackhole6(ctx context.Context, spec V6Spec) error {
 // RemoveBlackhole6 снимает блокировку: файл правил (чтобы хук перестал её
 // возвращать), джамп, затем цепочку. Идемпотентно.
 func (it *IPTables) RemoveBlackhole6(ctx context.Context) {
-	if it.cleanupBlackhole6 != nil {
-		it.cleanupBlackhole6()
-	}
+	it.v6.RemoveBlackholeFile()
 	it.removeJumps6FromTable(ctx, "mangle", Blackhole6Chain)
-	_ = it.runIP6Tables(ctx, "-t", "mangle", "-F", Blackhole6Chain)
-	_ = it.runIP6Tables(ctx, "-t", "mangle", "-X", Blackhole6Chain)
+	_ = it.v6.Run(ctx, "-t", "mangle", "-F", Blackhole6Chain)
+	_ = it.v6.Run(ctx, "-t", "mangle", "-X", Blackhole6Chain)
 }
 
 func (it *IPTables) drainFwmarkRules6(ctx context.Context) {
@@ -795,7 +875,7 @@ func (it *IPTables) removeJumps6(ctx context.Context) {
 }
 
 func (it *IPTables) removeJumps6FromTable(ctx context.Context, table, chain string) {
-	out, err := it.runIP6TablesOut(ctx, "-t", table, "-S", "PREROUTING")
+	out, err := it.v6.RunOutput(ctx, "-t", table, "-S", "PREROUTING")
 	if err != nil {
 		return
 	}
@@ -805,7 +885,7 @@ func (it *IPTables) removeJumps6FromTable(ctx context.Context, table, chain stri
 			continue
 		}
 		args := append([]string{"-t", table}, strings.Fields(strings.Replace(line, "-A PREROUTING", "-D PREROUTING", 1))...)
-		_ = it.runIP6Tables(ctx, args...)
+		_ = it.v6.Run(ctx, args...)
 	}
 }
 
@@ -823,11 +903,11 @@ type v6State struct {
 // probe6 снимает состояние v6-слоя. На ошибке запроса нули означают
 // «неизвестно», а не «отсутствует» — тот же контракт, что у probeAll.
 func (it *IPTables) probe6(ctx context.Context) (v6State, error) {
-	mangle, err := it.runIP6TablesOut(ctx, "-t", "mangle", "-S")
+	mangle, err := it.v6.RunOutput(ctx, "-t", "mangle", "-S")
 	if err != nil {
 		return v6State{}, err
 	}
-	nat, err := it.runIP6TablesOut(ctx, "-t", "nat", "-S")
+	nat, err := it.v6.RunOutput(ctx, "-t", "nat", "-S")
 	if err != nil {
 		return v6State{}, err
 	}
@@ -843,40 +923,11 @@ func (it *IPTables) probe6(ctx context.Context) (v6State, error) {
 
 // ---- файлы и хук ---------------------------------------------------------
 
-func writeNetfilter6RulesFiles(combined, mangle, nat string) error {
-	if err := storage.AtomicWritePerm(netfilter6RulesPath, []byte(combined), 0644); err != nil {
-		return err
-	}
-	if err := storage.AtomicWritePerm(netfilter6MangleRulesPath, []byte(mangle), 0644); err != nil {
-		return err
-	}
-	return storage.AtomicWritePerm(netfilter6NatRulesPath, []byte(nat), 0644)
-}
-
-func writeNetfilter6Hook() error {
-	return storage.AtomicWritePerm(netfilter6HookPath(), []byte(netfilter6HookScript()), 0755)
-}
-
-func writeNetfilter6BlackholeFile(input string) error {
-	return storage.AtomicWritePerm(netfilter6BlackholePath, []byte(input), 0644)
-}
-
-func removeNetfilter6BlackholeFile() { _ = os.Remove(netfilter6BlackholePath) }
-
 // blackhole6FilePresent — долговечная половина блокировки: файл переживает и
 // ALIVE-ветку хука, и рестарт демона (см. blackholeRulesFilePresent).
 var blackhole6FilePresent = func() bool {
 	_, err := os.Stat(netfilter6BlackholePath)
 	return err == nil
-}
-
-// removeNetfilter6Files удаляет файлы правил и хук: после этого перестройка
-// файрвола NDMS больше не возвращает v6-перехват.
-func removeNetfilter6Files() {
-	_ = os.Remove(netfilter6RulesPath)
-	_ = os.Remove(netfilter6MangleRulesPath)
-	_ = os.Remove(netfilter6NatRulesPath)
-	_ = os.Remove(netfilter6HookPath())
 }
 
 // v6RulesFilePresent — долговечный признак «v6-слой был установлен»: файл
@@ -894,10 +945,8 @@ var v6RulesFilePresent = func() bool {
 //   - ALIVE: правит настоящий перехват. Сначала сносится fail-closed
 //     блокировка, если задержалась, затем возвращаются цепочки перехвата, у
 //     которых NDMS стёр PREROUTING-джампы, — только та таблица, которую
-//     перестроили. После восстановления mangle сбрасывается таблица
-//     аппаратного ускорения (flushOffload6) и сносятся UDP-записи conntrack
-//     (evictPolicyFlows6); режим — метка политики или «все устройства» —
-//     читается из живого джампа, как в awgm-ctclean.sh.
+//     перестроили. После восстановления mangle запускается чистка потоков
+//     (ctClean6Script).
 //   - DEAD: fail-closed. Возвращается блокировка (если есть её файл правил, а
 //     джамп стёрт), чтобы трафик политики не ушёл мимо sing-box, пока движок
 //     лежит. Перехват в мёртвый порт здесь не восстанавливается — как и в v4.
@@ -940,9 +989,9 @@ table_ok() {
 }
 if pidof sing-box >/dev/null 2>&1; then
   # sing-box жив — блокировку снимаем, чтобы её DROP не стоял перед перехватом.
-  scrub_jumps mangle %[17]s
-  "$IP6T" -w -t mangle -F %[17]s 2>/dev/null
-  "$IP6T" -w -t mangle -X %[17]s 2>/dev/null
+  scrub_jumps mangle %[15]s
+  "$IP6T" -w -t mangle -F %[15]s 2>/dev/null
+  "$IP6T" -w -t mangle -X %[15]s 2>/dev/null
   [ -f %[1]q ] || exit 0
   if [ "$table" = "mangle" ] && ! table_ok mangle %[3]s && [ -f %[5]q ]; then
     scrub_jumps mangle %[3]s
@@ -951,17 +1000,7 @@ if pidof sing-box >/dev/null 2>&1; then
     %[8]s -6 rule add fwmark 0x%[9]x table %[10]d priority %[11]d 2>/dev/null || true
     %[8]s -6 route add local ::/0 dev lo table %[10]d 2>/dev/null || true
     logger -t awgm-tproxy6 "netfilter.d: restored mangle %[3]s after NDMS reload"
-    [ -w %[16]s ] && echo 1 > %[16]s 2>/dev/null
-    CT=%[15]s
-    if [ -x "$CT" ]; then
-      pmark="$("$IP6T" -w -t mangle -S PREROUTING 2>/dev/null \
-        | sed -n 's/.*-m mark --mark \(0x[0-9a-fA-F]*\).*-[jg] %[3]s.*/\1/p' | head -n 1)"
-      if [ -n "$pmark" ]; then
-        "$CT" -D -f ipv6 -p udp --mark "$(printf '%%d' "$pmark")" >/dev/null 2>&1
-      else
-        "$CT" -D -f ipv6 -p udp >/dev/null 2>&1
-      fi
-    fi
+    [ -x %[17]q ] && %[17]q
   fi
   if [ "$table" = "nat" ] && ! table_ok nat %[4]s && [ -f %[6]q ]; then
     scrub_jumps nat %[4]s
@@ -971,9 +1010,9 @@ if pidof sing-box >/dev/null 2>&1; then
 else
   # sing-box мёртв — fail-closed: возвращаем блокировку, если она была
   # поставлена (есть файл правил), а её джамп стёрт.
-  [ -f %[18]q ] || exit 0
-  if ! "$IP6T" -w -t mangle -S PREROUTING 2>/dev/null | grep -qE -- '-[jg] %[17]s($| )'; then
-    %[7]s --noflush < %[18]q
+  [ -f %[16]q ] || exit 0
+  if ! "$IP6T" -w -t mangle -S PREROUTING 2>/dev/null | grep -qE -- '-[jg] %[15]s($| )'; then
+    %[7]s --noflush < %[16]q
     logger -t awgm-tproxy6 "netfilter.d: re-asserted fail-closed blackhole (sing-box down)"
   fi
 fi
@@ -981,63 +1020,81 @@ exit 0
 `, netfilter6RulesPath, sysiptables.Binary6, Chain6Name, Redirect6Chain,
 		netfilter6MangleRulesPath, netfilter6NatRulesPath, sysiptables.RestoreBinary6,
 		ipBinary, Fwmark, RoutingTable, IPRule6Priority,
-		bypassSave6Path, bypassset.SetName6, bypassset.SetMaxElem, conntrackBinary, ppeFlushPath,
-		Blackhole6Chain, netfilter6BlackholePath)
+		bypassSave6Path, bypassset.SetName6, bypassset.SetMaxElem,
+		Blackhole6Chain, netfilter6BlackholePath, netfilterCtClean6Path)
 }
 
 // conntrackBinary — conntrack-tools из Entware; тот же путь, что в ctclean.
 const conntrackBinary = "/opt/sbin/conntrack"
 
-// evictPolicyFlows6 сносит UDP-записи conntrack в IPv6 после установки
-// правил. Best-effort: утилиты может не быть, а отказ не должен ронять
-// установку — перехват уже поднят.
-//
-// В режиме политики записи отбираются по connmark политики. В режиме «все
-// устройства» метки нет, и сносятся все UDP-записи IPv6: перехват и так
-// охватывает все LAN-устройства, а собственным потокам роутера снос стоит
-// одного пакета — NAT у них нет, запись пересоздаётся следующим же пакетом.
-func evictPolicyFlows6(ctx context.Context, spec V6Spec) {
-	flushOffload6()
-	args, ok := evictArgs6(spec)
-	if !ok {
-		return
-	}
-	if _, err := os.Stat(conntrackBinary); err != nil {
-		return
-	}
-	_, _ = sysexec.Run(ctx, conntrackBinary, args...)
-}
-
 // ppeFlushPath — узел сброса таблицы аппаратного ускорения MTK PPE; тот же,
 // что в awgm-ctclean.sh (#684). На платформах без PPE его нет.
 const ppeFlushPath = "/proc/sys/net/hwnat/ppe_flush"
 
-// flushOffload6 заставляет потоки, уже отданные аппаратному ускорению, один
-// раз пройти медленным путём. Ускорение IPv6 на Keenetic включено
-// (hwnat/ipv6_offload), и соединения, установленные до правил, идут мимо
-// netfilter: ни новые правила, ни снос записи conntrack их не возвращают.
-// v4 делает то же в ctclean, но только при живом v4-джампе и до установки
-// v6-правил — поэтому слой сбрасывает сам, после своих.
-func flushOffload6() {
-	f, err := os.OpenFile(ppeFlushPath, os.O_WRONLY, 0)
-	if err != nil {
-		return
-	}
-	_, _ = f.WriteString("1")
-	_ = f.Close()
-}
-
-// evictArgs6 — аргументы conntrack для evictPolicyFlows6. ok=false — метка
-// политики не разбирается, и сносить нечего: без отбора по метке в режиме
-// политики пострадали бы потоки устройств вне её.
-func evictArgs6(spec V6Spec) (args []string, ok bool) {
-	args = []string{"-D", "-f", "ipv6", "-p", "udp"}
-	if spec.MatchAll {
-		return args, true
-	}
-	mark, err := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(spec.PolicyMark), "0x"), 16, 32)
-	if err != nil {
-		return nil, false
-	}
-	return append(args, "--mark", strconv.FormatUint(mark, 10)), true
+// ctClean6Script рендерит скрипт чистки потоков v6-слоя — зеркало
+// ctCleanScript. Его зовут Install6 и хук после восстановления mangle. Pure
+// (без I/O): тест проверяет шелл через `sh -n`.
+//
+// Что чистится и зачем:
+//
+//   - Таблица аппаратного ускорения. Ускорение IPv6 на Keenetic включено
+//     (hwnat/ipv6_offload), и соединения, установленные до правил, идут мимо
+//     netfilter: ни новые правила, ни снос записи conntrack их не возвращают.
+//     Сбрасываем только когда джамп TPROXY действительно на месте — иначе
+//     потоки переучились бы через ту же дыру. v4-скрипт делает то же, но до
+//     установки v6-правил, поэтому слой сбрасывает сам.
+//   - UDP-записи conntrack потоков, родившихся до правил. Маршрут политики мог
+//     вести их через NAT, и TPROXY доставляет их пакеты уже с подменённым
+//     источником — sing-box отвечает не тому. Следующий пакет создаст поток
+//     заново, уже через правила. TCP не трогаем по той же причине, что и v4:
+//     обрыв установленного соединения хуже, а новые перехватятся сами.
+//
+// Режим читается из живого джампа, как в v4:
+//
+//   - политика (в джампе есть метка) — один вызов `conntrack -D --mark`:
+//     NDMS сохраняет метку политики в connmark, отбор идёт в ядре;
+//   - «все устройства» — проход по /proc/net/nf_conntrack с отбором по полю
+//     mac=. Keenetic пишет его на каждом потоке, начатом устройством LAN, и не
+//     пишет на собственных потоках роутера и на соединениях, открытых снаружи,
+//     — так под снос попадают ровно перехватываемые потоки.
+func ctClean6Script() string {
+	return fmt.Sprintf(`#!/bin/sh
+IP6T=%[1]s
+jumps="$("$IP6T" -w -t mangle -S PREROUTING 2>/dev/null | grep -E -- '-[jg] %[2]s($| )')"
+[ -n "$jumps" ] || exit 0
+if [ -w %[3]s ] && echo 1 > %[3]s 2>/dev/null; then
+  logger -t awgm-ctclean6 "flushed PPE offload table after TPROXY restore"
+fi
+CT=%[4]s
+[ -x "$CT" ] || { logger -t awgm-ctclean6 "conntrack tool missing — stale-flow eviction skipped"; exit 0; }
+pmark="$(printf '%%s\n' "$jumps" | sed -n 's/.*-m mark --mark \(0x[0-9a-fA-F]*\).*/\1/p' | head -n 1)"
+[ -n "$pmark" ] && pmark="$(printf '%%d' "$pmark" 2>/dev/null)"
+n=0
+if [ -n "$pmark" ]; then
+  d="$("$CT" -D -f ipv6 -p udp --mark "$pmark" 2>&1 >/dev/null \
+    | sed -n 's/.* \([0-9][0-9]*\) flow entries.*/\1/p')"
+  [ -n "$d" ] && n="$d"
+else
+  list="$(awk '
+    $1 == "ipv6" && $3 == "udp" {
+      src = ""; dst = ""; sp = ""; dp = ""; hasmac = 0;
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^src=/ && src == "") src = substr($i, 5);
+        else if ($i ~ /^dst=/ && dst == "") dst = substr($i, 5);
+        else if ($i ~ /^sport=/ && sp == "") sp = substr($i, 7);
+        else if ($i ~ /^dport=/ && dp == "") dp = substr($i, 7);
+        else if ($i ~ /^mac=/) hasmac = 1;
+      }
+      if (hasmac && src != "" && dst != "" && sp != "" && dp != "") print src, dst, sp, dp;
+    }' /proc/net/nf_conntrack 2>/dev/null)"
+  if [ -n "$list" ]; then
+    n="$(printf '%%s\n' "$list" | wc -l)"
+    printf '%%s\n' "$list" | while read -r s d sp dp; do
+      "$CT" -D -f ipv6 -p udp -s "$s" -d "$d" --sport "$sp" --dport "$dp" >/dev/null 2>&1
+    done
+  fi
+fi
+[ "$n" -gt 0 ] && logger -t awgm-ctclean6 "evicted $n IPv6 UDP flow(s) after TPROXY restore"
+exit 0
+`, sysiptables.Binary6, Chain6Name, ppeFlushPath, conntrackBinary)
 }

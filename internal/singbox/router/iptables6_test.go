@@ -11,7 +11,7 @@ import (
 	"github.com/hoaxisr/awg-manager/internal/storage"
 )
 
-// v6Exec — записывающая подмена швов v6-слоя.
+// v6Exec — записывающая реализация v6Backend.
 type v6Exec struct {
 	restores []string
 	ip6t     [][]string
@@ -20,25 +20,104 @@ type v6Exec struct {
 	dump       string
 	dumpErr    error
 	restoreErr error
+	// persistErr — отказ записи файлов правил (PersistRules).
+	persistErr error
 	evicted    int
 	hookWrites int
 	cleanups   int
+	// rulesWrites — сколько раз записаны файлы правил перехвата.
+	rulesWrites int
 
 	blackholeWrites   int
 	blackholeCleanups int
+
+	// events — порядок обращений к restore и к записи файлов.
+	events []string
+	// onRestore, если задан, подменяет запись restore: тесты снимают в нём
+	// состояние окружения на момент применения правил.
+	onRestore func(in string) error
+	// onRunOutput зовётся на каждом `ip6tables -S`.
+	onRunOutput func()
 }
+
+func (fe *v6Exec) Restore(_ context.Context, in string) error {
+	fe.events = append(fe.events, "restore")
+	if fe.onRestore != nil {
+		return fe.onRestore(in)
+	}
+	fe.restores = append(fe.restores, in)
+	return fe.restoreErr
+}
+
+func (fe *v6Exec) Run(_ context.Context, args ...string) error {
+	fe.ip6t = append(fe.ip6t, args)
+	return nil
+}
+
+func (fe *v6Exec) RunOutput(context.Context, ...string) (string, error) {
+	if fe.onRunOutput != nil {
+		fe.onRunOutput()
+	}
+	return fe.dump, fe.dumpErr
+}
+
+func (fe *v6Exec) PersistRules(_, _, _ string) error {
+	fe.events = append(fe.events, "rules")
+	if fe.persistErr != nil {
+		return fe.persistErr
+	}
+	fe.rulesWrites++
+	return nil
+}
+
+func (fe *v6Exec) PersistHook() error {
+	fe.events = append(fe.events, "hook")
+	fe.hookWrites++
+	return nil
+}
+
+func (fe *v6Exec) RemoveFiles() { fe.cleanups++ }
+
+func (fe *v6Exec) CleanFlows(context.Context) {
+	fe.events = append(fe.events, "clean")
+	fe.evicted++
+}
+
+func (fe *v6Exec) PersistBlackhole(string) error {
+	fe.events = append(fe.events, "blackhole")
+	fe.blackholeWrites++
+	return nil
+}
+
+func (fe *v6Exec) RemoveBlackholeFile() { fe.blackholeCleanups++ }
+
+// nopV6 — v6Backend, который ничего не делает и ничего не находит: для
+// тестовых IPTables, которым v6-слой не интересен. Пустой ответ `-S` значит
+// «наших цепочек нет».
+type nopV6 struct{}
+
+func (nopV6) Restore(context.Context, string) error                { return nil }
+func (nopV6) Run(context.Context, ...string) error                 { return nil }
+func (nopV6) RunOutput(context.Context, ...string) (string, error) { return "", nil }
+func (nopV6) PersistRules(_, _, _ string) error                    { return nil }
+func (nopV6) PersistHook() error                                   { return nil }
+func (nopV6) RemoveFiles()                                         {}
+func (nopV6) CleanFlows(context.Context)                           {}
+func (nopV6) PersistBlackhole(string) error                        { return nil }
+func (nopV6) RemoveBlackholeFile()                                 {}
+
+// Системная сторона слоя — один интерфейс. Неполная реализация не
+// компилируется, поэтому проверять «подключены ли зависимости» во время
+// работы нечем и незачем.
+var (
+	_ v6Backend = systemV6{}
+	_ v6Backend = (*v6Exec)(nil)
+	_ v6Backend = nopV6{}
+)
 
 func newV6IPTables(fe *v6Exec) *IPTables {
 	it := newStubIPTables(func(context.Context, string) error { return nil })
-	it.restoreNoflush6 = func(_ context.Context, in string) error {
-		fe.restores = append(fe.restores, in)
-		return fe.restoreErr
-	}
-	it.runIP6Tables = func(_ context.Context, args ...string) error {
-		fe.ip6t = append(fe.ip6t, args)
-		return nil
-	}
-	it.runIP6TablesOut = func(_ context.Context, _ ...string) (string, error) { return fe.dump, fe.dumpErr }
+	it.v6 = fe
 	it.runIP = func(_ context.Context, args ...string) error {
 		fe.ip = append(fe.ip, args)
 		// `ip -6 rule del` — одно удаление, затем ENOENT: иначе цикл drain
@@ -56,12 +135,6 @@ func newV6IPTables(fe *v6Exec) *IPTables {
 		}
 		return nil
 	}
-	it.persistRules6 = func(_, _, _ string) error { return nil }
-	it.persistHook6 = func() error { fe.hookWrites++; return nil }
-	it.cleanupHook6 = func() { fe.cleanups++ }
-	it.evictFlows6 = func(context.Context, V6Spec) { fe.evicted++ }
-	it.persistBlackhole6 = func(string) error { fe.blackholeWrites++; return nil }
-	it.cleanupBlackhole6 = func() { fe.blackholeCleanups++ }
 	return it
 }
 
@@ -276,7 +349,7 @@ func TestParseIfInet6_BridgeWithoutLinkLocal(t *testing.T) {
 
 func TestBuildV6Spec_SkipsUnmappableBridges(t *testing.T) {
 	topo := v6Topology{Bridges: []string{"br0", "br99"}}
-	spec, skipped := buildV6Spec(storage.SingboxRouterSettings{}, "0xffffaab", true, topo, nil, nil)
+	spec, skipped, _ := buildV6Spec(storage.SingboxRouterSettings{}, "0xffffaab", true, topo, nil, nil)
 	if len(spec.Bridges) != 1 || spec.Bridges[0].Name != "br0" {
 		t.Errorf("Bridges = %v, want только br0", spec.Bridges)
 	}
@@ -425,11 +498,18 @@ func TestInstall6(t *testing.T) {
 	if !hasCall(fe.ip, "-6", "route", "add", "local", "::/0", "dev", "lo", "table", "100") {
 		t.Errorf("нет ip -6 route add: %v", fe.ip)
 	}
-	if fe.hookWrites != 1 || fe.evicted != 1 {
-		t.Errorf("hookWrites=%d, evicted=%d, want 1, 1", fe.hookWrites, fe.evicted)
+	if fe.rulesWrites != 1 || fe.hookWrites != 1 || fe.evicted != 1 {
+		t.Errorf("rulesWrites=%d, hookWrites=%d, evicted=%d, want 1, 1, 1", fe.rulesWrites, fe.hookWrites, fe.evicted)
+	}
+	// Файлы правил и хук — только после успешного restore; чистка потоков —
+	// последней, когда правила уже стоят.
+	if want := []string{"restore", "rules", "hook", "clean"}; !reflect.DeepEqual(fe.events, want) {
+		t.Errorf("порядок установки: %v, want %v", fe.events, want)
 	}
 }
 
+// Отвергнутый ядром спек не должен попасть на диск: хук применяет файлы
+// правил на каждой перестройке файрвола и воспроизводил бы тот же отказ.
 func TestInstall6_RestoreError(t *testing.T) {
 	fe := &v6Exec{restoreErr: errors.New("line 3 failed")}
 	it := newV6IPTables(fe)
@@ -438,6 +518,23 @@ func TestInstall6_RestoreError(t *testing.T) {
 	}
 	if len(fe.ip) != 0 {
 		t.Errorf("после провала restore правило и маршрут ставить нельзя: %v", fe.ip)
+	}
+	if fe.rulesWrites != 0 || fe.hookWrites != 0 || fe.evicted != 0 {
+		t.Errorf("после провала restore на диск писать нельзя: rules=%d hook=%d clean=%d",
+			fe.rulesWrites, fe.hookWrites, fe.evicted)
+	}
+}
+
+// Отказ записи файлов правил — тоже ошибка установки: без них хук не вернёт
+// перехват после перестройки файрвола.
+func TestInstall6_PersistError(t *testing.T) {
+	fe := &v6Exec{persistErr: errors.New("no space left on device")}
+	it := newV6IPTables(fe)
+	if err := it.Install6(context.Background(), testV6Spec()); err == nil {
+		t.Fatal("ошибка записи файлов правил обязана уйти наверх")
+	}
+	if fe.hookWrites != 0 {
+		t.Errorf("хук без файлов правил писать незачем: hookWrites=%d", fe.hookWrites)
 	}
 }
 
@@ -492,18 +589,11 @@ func TestProbe6(t *testing.T) {
 	}
 }
 
-// Тестовые сборки IPTables без v6-швов: слой обязан быть выключен, а не
-// падать на nil-функции.
-func TestHasV6(t *testing.T) {
-	if newStubIPTables(func(context.Context, string) error { return nil }).hasV6() {
-		t.Error("IPTables без v6-швов не должен считаться v6-способным")
-	}
-	if !newV6IPTables(&v6Exec{}).hasV6() {
-		t.Error("IPTables с v6-швами обязан считаться v6-способным")
-	}
-	var nilIt *IPTables
-	if nilIt.hasV6() {
-		t.Error("nil-IPTables не v6-способен")
+// Боевой конструктор обязан отдавать IPTables с подключённым v6-слоем:
+// выключается слой настройкой, а не отсутствием зависимостей.
+func TestNewIPTables_HasV6Backend(t *testing.T) {
+	if _, ok := NewIPTables().v6.(systemV6); !ok {
+		t.Fatalf("NewIPTables обязан подключать systemV6, got %T", NewIPTables().v6)
 	}
 }
 

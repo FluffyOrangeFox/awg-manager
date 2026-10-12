@@ -2,6 +2,7 @@ package bypassset
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,9 +58,12 @@ func TestPopulate_V6FillsOwnSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Populate: %v", err)
 	}
-	// Стаб отвечает «2 записи» на каждый набор: сумма по обоим.
-	if res.EntryCount != 4 || !res.CountOK {
-		t.Errorf("EntryCount/CountOK: want 4/true, got %d/%v", res.EntryCount, res.CountOK)
+	// Стаб отвечает «2 записи» на каждый набор; у половин свои счётчики.
+	if res.EntryCount != 2 || !res.CountOK {
+		t.Errorf("EntryCount/CountOK: want 2/true, got %d/%v", res.EntryCount, res.CountOK)
+	}
+	if res.EntryCount6 != 2 || !res.Count6OK || res.Err6 != nil {
+		t.Errorf("EntryCount6/Count6OK/Err6: want 2/true/nil, got %d/%v/%v", res.EntryCount6, res.Count6OK, res.Err6)
 	}
 
 	argv := tr.argv()
@@ -118,5 +122,140 @@ func TestDestroySet6_RemovesLiveAndStaging(t *testing.T) {
 	want := []string{"destroy " + SetName6, "destroy " + StagingSetName6}
 	if got := tr.argv(); !equalSeq(got, want) {
 		t.Errorf("вызовы: want %v, got %v", want, got)
+	}
+}
+
+// IPv6-записи уходят в черновик чанками по мере чтения тегов, как и IPv4, а не
+// копятся целиком до конца прохода: вся IPv6-часть выбранных тегов в куче
+// разом — заметная нагрузка на роутерах с малой памятью.
+func TestPopulate_V6StreamsInChunks(t *testing.T) {
+	tr := installIPSetStub(t)
+	const n6 = IpsetChunkSize*2 + 10
+	lines := make([]string, 0, n6+1)
+	lines = append(lines, "1.2.3.0/24")
+	for i := 0; i < n6; i++ {
+		lines = append(lines, fmt.Sprintf("2001:db8:%x::/48", i))
+	}
+	geo := stubGeo{lines: map[string][]string{"ru": lines}}
+
+	if _, err := Populate(context.Background(), geo, PopulateInput{GeoIPTags: []string{"ru"}, V6: true}); err != nil {
+		t.Fatalf("Populate: %v", err)
+	}
+
+	argv := tr.argv()
+	swap4, restores, restoresBeforeSwap4 := -1, 0, 0
+	for i, a := range argv {
+		switch a {
+		case "swap " + SetName + " " + StagingSetName:
+			swap4 = i
+		case "restore -exist":
+			restores++
+			if swap4 < 0 {
+				restoresBeforeSwap4++
+			}
+		}
+	}
+	// Два полных чанка IPv6 + остаток + один чанк IPv4.
+	if restores != 4 {
+		t.Errorf("вызовов ipset restore: %d, want 4 (2 полных чанка IPv6, остаток, чанк IPv4)\n%v", restores, argv)
+	}
+	// Полные чанки IPv6 сброшены ещё во время чтения тега — до того, как
+	// IPv4-набор дошёл до swap. Копи мы семейство целиком, до swap был бы один
+	// restore (IPv4).
+	if swap4 < 0 || restoresBeforeSwap4 != 3 {
+		t.Errorf("до swap IPv4-набора ожидалось 3 restore (2 чанка IPv6 + IPv4), got %d\n%v", restoresBeforeSwap4, argv)
+	}
+	added6 := 0
+	for _, l := range tr.stdin() {
+		if strings.HasPrefix(l, "add "+StagingSetName6+" ") {
+			added6++
+		}
+	}
+	if added6 != n6 {
+		t.Errorf("в черновик IPv6 ушло %d записей, want %d", added6, n6)
+	}
+}
+
+// installIPSetStubFailing6 — как installIPSetStub, но `ipset restore` падает,
+// если во входе есть записи черновика IPv6.
+func installIPSetStubFailing6(t *testing.T) *ipsetTrace {
+	t.Helper()
+	log := filepath.Join(t.TempDir(), "calls.log")
+	script := fmt.Sprintf(`#!/bin/sh
+LOG=%q
+echo "ARGV: $*" >> "$LOG"
+case "$1" in
+restore)
+	rc=0
+	while IFS= read -r line; do
+		echo "STDIN: $line" >> "$LOG"
+		case "$line" in *%s*) rc=1 ;; esac
+	done
+	exit $rc
+	;;
+save)
+	echo "create AWGM-BYPASS hash:net family inet maxelem 262144"
+	echo "add AWGM-BYPASS 1.2.3.0/24"
+	;;
+list)
+	if [ "$3" = "-t" ]; then
+		echo "Name: AWGM-BYPASS"
+		echo "Number of entries: 2"
+	fi
+	;;
+esac
+exit 0
+`, log, StagingSetName6)
+	bin := writeStubIPSet(t, script)
+	withHealthTestEnv(t, []string{bin}, func(string) (bool, string) { return false, "" })
+	return &ipsetTrace{t: t, log: log}
+}
+
+// Отказ IPv6-половины не роняет наполнение: IPv4-набор собран, прошёл swap и
+// сохранён, ошибка Populate пуста, а причина лежит в Err6. Живой IPv6-набор
+// при этом не тронут — до swap дело не дошло.
+func TestPopulate_V6FailureLeavesV4Built(t *testing.T) {
+	tr := installIPSetStubFailing6(t)
+	geo := stubGeo{lines: map[string][]string{
+		"ru": {"1.2.3.0/24", "2a00::/32", "5.5.5.5"},
+	}}
+	dir := t.TempDir()
+	save4, save6 := filepath.Join(dir, "bypass.ipset"), filepath.Join(dir, "bypass6.ipset")
+
+	res, err := Populate(context.Background(), geo, PopulateInput{
+		GeoIPTags: []string{"ru"},
+		SavePath:  save4,
+		V6:        true,
+		SavePath6: save6,
+	})
+	if err != nil {
+		t.Fatalf("отказ IPv6-половины не должен быть ошибкой Populate: %v", err)
+	}
+	if res.EntryCount != 2 || !res.CountOK {
+		t.Errorf("IPv4-набор обязан быть собран: %d/%v", res.EntryCount, res.CountOK)
+	}
+	if res.Err6 == nil || !strings.Contains(res.Err6.Error(), "populate staging") {
+		t.Fatalf("Err6 обязан назвать причину отказа IPv6-половины, got %v", res.Err6)
+	}
+	if res.Count6OK || res.EntryCount6 != 0 {
+		t.Errorf("размер несобранного IPv6-набора — не факт: %d/%v", res.EntryCount6, res.Count6OK)
+	}
+	sawSwap4 := false
+	for _, a := range tr.argv() {
+		if a == "swap "+SetName+" "+StagingSetName {
+			sawSwap4 = true
+		}
+		if a == "swap "+SetName6+" "+StagingSetName6 {
+			t.Errorf("недолитый черновик IPv6 не должен дойти до swap")
+		}
+	}
+	if !sawSwap4 {
+		t.Error("IPv4-набор обязан пройти swap")
+	}
+	if _, err := os.Stat(save4); err != nil {
+		t.Errorf("дамп IPv4-набора обязан быть записан: %v", err)
+	}
+	if _, err := os.Stat(save6); err == nil {
+		t.Error("дамп несобранного IPv6-набора писать нельзя")
 	}
 }

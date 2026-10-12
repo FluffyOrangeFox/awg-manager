@@ -29,11 +29,19 @@ type PopulateInput struct {
 
 // PopulateResult — итог наполнения: размер живого набора (CountOK=false —
 // счётчик получить не удалось, ноль недостоверен) и теги, которых нет в .dat.
-// При V6 EntryCount — сумма по обоим наборам.
 type PopulateResult struct {
 	EntryCount  int
 	CountOK     bool
 	MissingTags []string
+
+	// Итог IPv6-половины (AWGM-BYPASS6); заполняется только при V6. Отдельно
+	// от полей выше намеренно: половины независимы — у каждой свой черновик и
+	// свой swap, — и отказ одной не должен выглядеть как сбой всего набора.
+	EntryCount6 int
+	Count6OK    bool
+	// Err6 — отказ IPv6-половины. Ошибкой Populate он НЕ становится:
+	// IPv4-набор при этом собран, сохранён и действует.
+	Err6 error
 }
 
 // Populate статично наполняет AWGM-BYPASS: geoip-теги → staging → атомарный
@@ -59,9 +67,11 @@ func Populate(ctx context.Context, geo GeoSource, in PopulateInput) (PopulateRes
 		chunk = chunk[:0]
 		return err
 	}
-	// IPv6-записи копятся целиком и заливаются отдельным проходом после
-	// IPv4: у каждого семейства свой черновик и свой swap.
-	var entries6 []string
+	// IPv6-записи идут в свой черновик теми же чанками, что и IPv4: копить
+	// семейство целиком — это вся IPv6-часть выбранных тегов в куче разом, а
+	// наполнение идёт на роутерах с 128–256 МБ памяти. После первого отказа
+	// половина выключается до конца прохода (v6.err), IPv4 идёт дальше.
+	v6 := newStaging6(ctx, in.V6)
 	for _, tag := range in.GeoIPTags {
 		lines, notFound, err := geo.GeoIPTagLines(tag)
 		if notFound {
@@ -81,11 +91,7 @@ func Populate(ctx context.Context, geo GeoSource, in PopulateInput) (PopulateRes
 				}
 				continue
 			}
-			if in.V6 {
-				if c := NormalizeEntry6(l); c != "" {
-					entries6 = append(entries6, c)
-				}
-			}
+			v6.add(ctx, l)
 		}
 	}
 	if err := flush(); err != nil {
@@ -104,14 +110,7 @@ func Populate(ctx context.Context, geo GeoSource, in PopulateInput) (PopulateRes
 		}
 	}
 	if in.V6 {
-		n6, ok6, err := populate6(ctx, entries6, in.SavePath6)
-		res.EntryCount += n6
-		res.CountOK = res.CountOK && ok6
-		if err != nil {
-			// IPv4-набор уже собран и сохранён; отказ IPv6-половины отдаём
-			// отдельной причиной, чтобы она не выглядела как сбой всего набора.
-			return res, fmt.Errorf("ipv6: %w", err)
-		}
+		res.EntryCount6, res.Count6OK, res.Err6 = v6.commit(ctx, in.SavePath6)
 	}
 	return res, nil
 }

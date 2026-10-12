@@ -1234,6 +1234,7 @@ func TestHealQoSConfig_DoesNotApplyPendingDraft(t *testing.T) {
 // end of UpdateSettings is a clean no-op for a disabled router.
 func noopNotInstalledIPTables() *IPTables {
 	return &IPTables{
+		v6:             nopV6{},
 		restoreNoflush: func(_ context.Context, _ string) error { return nil },
 		runIPTables:    func(_ context.Context, _ ...string) error { return errors.New("chain missing") },
 		runIPTablesOut: func(_ context.Context, _ ...string) (string, error) { return "", nil },

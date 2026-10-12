@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hoaxisr/awg-manager/internal/singbox/router/bypassset"
 	"github.com/hoaxisr/awg-manager/internal/storage"
 )
 
@@ -21,7 +22,17 @@ type v6Env struct {
 	setEnsured   int
 	setEnsureErr error
 	setDropped   int
+
+	// portsReserved — сколько раз слой просил зарезервировать свои порты.
+	portsReserved   int
+	portsReserveErr error
 }
+
+// Резерв портов пишет в sysctl ядра. Тесты нередко идут под root (контейнер,
+// WSL), где запись прошла бы по-настоящему, — поэтому для всего тестового
+// бинаря шов по умолчанию пуст; считают вызовы те тесты, которым это нужно
+// (stubV6Env).
+func init() { reserveV6ListenPorts = func() error { return nil } }
 
 func stubV6Env(t *testing.T) *v6Env {
 	t.Helper()
@@ -32,6 +43,8 @@ func stubV6Env(t *testing.T) *v6Env {
 	oldTopo, oldProbe, oldFile := collectV6Topology, v6SocketsProbe, v6RulesFilePresent
 	oldEnsure, oldDrop := ensureBypassSet6, dropBypassSet6
 	oldBH := blackhole6FilePresent
+	oldReserve := reserveV6ListenPorts
+	reserveV6ListenPorts = func() error { env.portsReserved++; return env.portsReserveErr }
 	blackhole6FilePresent = func() bool { return env.blackholeFile }
 	collectV6Topology = func() (v6Topology, error) { return env.topo, env.topoErr }
 	v6SocketsProbe = func(V6Spec) bool { return env.bound }
@@ -43,6 +56,7 @@ func stubV6Env(t *testing.T) *v6Env {
 		collectV6Topology, v6SocketsProbe, v6RulesFilePresent = oldTopo, oldProbe, oldFile
 		ensureBypassSet6, dropBypassSet6 = oldEnsure, oldDrop
 		blackhole6FilePresent = oldBH
+		reserveV6ListenPorts = oldReserve
 	})
 	return env
 }
@@ -194,7 +208,7 @@ func TestReconcileInstalled_V6Off_StaleFileUninstalls(t *testing.T) {
 func TestReconcileInstalled_V6Off_NoIP6TablesCalls(t *testing.T) {
 	svc, fe, _, sr := newV6ReconcileService(t, FamilyIPv4Only)
 	calls := 0
-	svc.deps.IPTables.runIP6TablesOut = func(context.Context, ...string) (string, error) { calls++; return "", nil }
+	fe.onRunOutput = func() { calls++ }
 	mustReconcile(t, svc, sr)
 	mustReconcile(t, svc, sr)
 	if calls != 0 || len(fe.ip6t) != 0 || len(fe.restores) != 0 || fe.cleanups != 0 {
@@ -371,7 +385,7 @@ func TestReconcileInstalled_V6GeoIPSet_EnsuredBeforeInstall(t *testing.T) {
 	svc, fe, env, sr := newV6ReconcileService(t, FamilyBoth)
 	sr.BypassGeoIPTags = []string{"geoip:cn"}
 	ensuredAtRestore := -1
-	svc.deps.IPTables.restoreNoflush6 = func(_ context.Context, in string) error {
+	fe.onRestore = func(in string) error {
 		ensuredAtRestore = env.setEnsured
 		fe.restores = append(fe.restores, in)
 		return nil
@@ -411,7 +425,7 @@ func TestReconcileInstalled_V6GeoIPSet_DroppedAfterRulesReinstalled(t *testing.T
 	}
 
 	droppedAtRestore := -1
-	svc.deps.IPTables.restoreNoflush6 = func(_ context.Context, in string) error {
+	fe.onRestore = func(in string) error {
 		droppedAtRestore = env.setDropped
 		fe.restores = append(fe.restores, in)
 		return nil
@@ -557,7 +571,7 @@ func TestReconcileInstalled_V6Blackhole_EngagedThenLifted(t *testing.T) {
 	// Движок вернулся: перехват ставится, блокировка снимается — после него.
 	sb.isRunningFn = func() (bool, int) { return true, 4321 }
 	cleanupsAtInstall := -1
-	svc.deps.IPTables.restoreNoflush6 = func(_ context.Context, in string) error {
+	fe.onRestore = func(in string) error {
 		cleanupsAtInstall = fe.blackholeCleanups
 		fe.restores = append(fe.restores, in)
 		return nil
@@ -652,5 +666,374 @@ func TestReconcileInstalled_V6SkippedBridge_LoggedOnce(t *testing.T) {
 	}
 	if svc.appliedV6 == nil || len(svc.appliedV6.Bridges) != 1 {
 		t.Errorf("слой обязан встать на оставшемся мосту: %+v", svc.appliedV6)
+	}
+}
+
+// Порты v6-слоя убираются из эфемерного пула только при включённом перехвате
+// IPv6 и один раз за жизнь процесса: при "ipv4_only" слой не оставляет на
+// роутере ничего, включая запись в ip_local_reserved_ports.
+func TestReconcileInstalled_V6PortsReservedOnlyWhenOn(t *testing.T) {
+	svc, _, env, sr := newV6ReconcileService(t, FamilyIPv4Only)
+	mustReconcile(t, svc, sr)
+	mustReconcile(t, svc, sr)
+	if env.portsReserved != 0 {
+		t.Fatalf("при ipv4_only порты v6 резервировать нельзя: вызовов %d", env.portsReserved)
+	}
+
+	sr.InterceptFamily = FamilyBoth
+	mustReconcile(t, svc, sr)
+	mustReconcile(t, svc, sr)
+	if env.portsReserved != 1 {
+		t.Errorf("включение перехвата IPv6 обязано зарезервировать порты ровно один раз: вызовов %d", env.portsReserved)
+	}
+}
+
+// Отказ резерва не мешает слою встать и не повторяется на каждой сверке.
+func TestReconcileInstalled_V6PortsReserveFailure_NotFatal(t *testing.T) {
+	svc, fe, env, sr := newV6ReconcileService(t, FamilyBoth)
+	env.portsReserveErr = errors.New("read-only file system")
+	mustReconcile(t, svc, sr)
+	mustReconcile(t, svc, sr)
+	if env.portsReserved != 1 {
+		t.Errorf("попытка резерва обязана быть одна: вызовов %d", env.portsReserved)
+	}
+	if len(fe.restores) == 0 || svc.appliedV6 == nil {
+		t.Errorf("отказ резерва портов не должен мешать установке правил")
+	}
+}
+
+// sweepV6 — безусловный снос для путей вне режима tproxy: после рестарта
+// демона снимков в памяти нет, файла правил может не быть, а цепочки и хук
+// живы. Снос обязан пройти и в этом случае — и забрать набор AWGM-BYPASS6.
+func TestSweepV6_UnconditionalEvenWithoutTraces(t *testing.T) {
+	svc, fe, env, _ := newV6ReconcileService(t, FamilyIPv4Only)
+	fe.dump = v6JumpsDump()
+	// Ни снимков, ни файлов: teardownV6 здесь ничего бы не сделал.
+	svc.sweepV6(context.Background())
+
+	if fe.cleanups != 1 || fe.blackholeCleanups != 1 {
+		t.Errorf("файлы правил, хук и блокировка обязаны быть сняты: cleanups=%d blackhole=%d", fe.cleanups, fe.blackholeCleanups)
+	}
+	if !hasCall(fe.ip6t, "-t", "mangle", "-X", Chain6Name) || !hasCall(fe.ip6t, "-t", "nat", "-X", Redirect6Chain) {
+		t.Errorf("цепочки перехвата не удалены: %v", fe.ip6t)
+	}
+	if env.setDropped != 1 {
+		t.Errorf("набор AWGM-BYPASS6 обязан быть снесён: dropped=%d", env.setDropped)
+	}
+}
+
+// fakeip-tun: первый тик сверки сносит v6-слой прежнего tproxy-режима рядом с
+// v4-остатками — в этом режиме его цепочки не сверяет никто. Свип разовый.
+func TestReconcileFakeIPTun_FirstTickSweepsV6Layer(t *testing.T) {
+	h := newFakeIPEnableHarness(t, "")
+	if err := h.svc.Enable(context.Background()); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
+
+	env := stubV6Env(t)
+	fe := &v6Exec{dump: v6JumpsDump()}
+	h.svc.deps.IPTables = newV6IPTables(fe)
+	h.svc.netfilterStateKnown = false
+
+	all, _ := h.store.Load()
+	sr, _ := NormalizeSingboxRouterSettings(all.SingboxRouter)
+	if err := h.svc.reconcileFakeIPTun(context.Background(), sr); err != nil {
+		t.Fatalf("тик 1: %v", err)
+	}
+	if fe.cleanups != 1 || env.setDropped != 1 {
+		t.Fatalf("тик 1: v6-слой обязан быть снесён: cleanups=%d dropped=%d", fe.cleanups, env.setDropped)
+	}
+	if !hasCall(fe.ip6t, "-t", "mangle", "-X", Chain6Name) {
+		t.Errorf("тик 1: цепочка перехвата IPv6 не удалена: %v", fe.ip6t)
+	}
+	if err := h.svc.reconcileFakeIPTun(context.Background(), sr); err != nil {
+		t.Fatalf("тик 2: %v", err)
+	}
+	if fe.cleanups != 1 {
+		t.Errorf("тик 2: свип обязан быть разовым, cleanups=%d", fe.cleanups)
+	}
+}
+
+// policy-tun: то же на выходе из режима — рядом с v4-Uninstall.
+func TestPolicyTunDisable_SweepsV6Layer(t *testing.T) {
+	h := newPolicyTunEnableHarness(t, "")
+	stubOrphanNetdev(t, true)
+	provisionPolicyTunForDisable(t, h)
+
+	env := stubV6Env(t)
+	fe := &v6Exec{dump: v6JumpsDump()}
+	h.svc.deps.IPTables = newV6IPTables(fe)
+
+	if err := h.svc.Disable(context.Background()); err != nil {
+		t.Fatalf("Disable(policy-tun): %v", err)
+	}
+	if fe.cleanups != 1 || env.setDropped != 1 {
+		t.Errorf("v6-слой обязан быть снесён: cleanups=%d dropped=%d", fe.cleanups, env.setDropped)
+	}
+	if !hasCall(fe.ip6t, "-t", "mangle", "-X", Chain6Name) {
+		t.Errorf("цепочка перехвата IPv6 не удалена: %v", fe.ip6t)
+	}
+}
+
+// policy-tun с активными классами QoS: ветка сноса v4-правил не достигается,
+// но первая сверка после рестарта демона обязана снять v6-сироту.
+func TestReconcilePolicyTun_FirstTickSweepsV6Layer(t *testing.T) {
+	h := newPolicyTunEnableHarness(t, "")
+	all, _ := h.store.Load()
+	all.SingboxRouter.QoSClasses = []storage.SingboxQoSClass{
+		{DSCP: 46, Name: "VoIP", Outbound: "direct", Enabled: true},
+	}
+	if err := h.store.Update(func(cur *storage.Settings) error { *cur = *all; return nil }); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	h.svc.deps.IPTables = newStubIPTables(func(context.Context, string) error { return nil })
+	h.svc.deps.WANIPCollector = &fakeWANIPCollector{}
+	h.svc.deps.NetfilterPreflight = func(context.Context) error { return nil }
+	h.svc.deps.XtDscpProbe = func(context.Context) bool { return true }
+	provisionPolicyTunForReconcile(t, h)
+	h.svc.deps.RunningConfig = &fakeRunningConfig{lines: healthyPolicyTunRC("OpkgTun0")}
+
+	env := stubV6Env(t)
+	fe := &v6Exec{dump: v6JumpsDump()}
+	h.svc.deps.IPTables = newV6IPTables(fe)
+	// Свежий процесс: про установленное состояние ничего не известно.
+	h.svc.netfilterStateKnown = false
+
+	all, _ = h.store.Load()
+	sr, _ := NormalizeSingboxRouterSettings(all.SingboxRouter)
+	if err := h.svc.reconcilePolicyTun(context.Background(), sr); err != nil {
+		t.Fatalf("тик 1: %v", err)
+	}
+	if fe.cleanups != 1 || env.setDropped != 1 {
+		t.Fatalf("тик 1: v6-слой обязан быть снесён: cleanups=%d dropped=%d", fe.cleanups, env.setDropped)
+	}
+	if err := h.svc.reconcilePolicyTun(context.Background(), sr); err != nil {
+		t.Fatalf("тик 2: %v", err)
+	}
+	if fe.cleanups != 1 {
+		t.Errorf("тик 2: свип обязан быть разовым, cleanups=%d", fe.cleanups)
+	}
+}
+
+// buildV6Spec не глотает ошибки разбора исключений: спек собран без
+// нечитаемой части, а причина возвращена вызывающему.
+func TestBuildV6Spec_ReturnsResolverErrors(t *testing.T) {
+	topo := v6Topology{Bridges: []string{"br0"}}
+
+	spec, _, err := buildV6Spec(storage.SingboxRouterSettings{BypassExtraSubnets: "2001:db8::/48, мусор"}, "0xffffaab", true, topo, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "подсети") {
+		t.Fatalf("нечитаемые подсети обязаны дать ошибку с пометкой «подсети», got %v", err)
+	}
+	if len(spec.Bridges) != 1 || len(spec.BypassCIDRs) != 0 {
+		t.Errorf("спек обязан собраться без нечитаемой части: bridges=%v cidrs=%v", spec.Bridges, spec.BypassCIDRs)
+	}
+
+	_, _, err = buildV6Spec(storage.SingboxRouterSettings{BypassExtraPorts: "не порт"}, "0xffffaab", true, topo, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "порты") {
+		t.Fatalf("нечитаемые порты обязаны дать ошибку с пометкой «порты», got %v", err)
+	}
+
+	if _, _, err := buildV6Spec(storage.SingboxRouterSettings{BypassExtraSubnets: "2001:db8::/48", BypassExtraPorts: "443 TCP"}, "0xffffaab", true, topo, nil, nil); err != nil {
+		t.Errorf("читаемые исключения ошибки не дают: %v", err)
+	}
+}
+
+// Ошибка разбора исключений доходит до журнала — один раз, а не каждые 30
+// секунд сверки, — и спек при этом собран. Настройки проходят валидацию на
+// записи и в начале сверки, так что сюда она доходит только мимо них; зовём
+// desiredV6 напрямую.
+func TestDesiredV6_SpecError_LoggedOnce(t *testing.T) {
+	svc, _, _, sr := newV6ReconcileService(t, FamilyBoth)
+	sr.BypassExtraSubnets = "2001:db8::/48, мусор"
+
+	spec, state := svc.desiredV6(context.Background(), sr, "0xffffaab", true)
+	if state != v6On || len(spec.Bridges) != 1 {
+		t.Fatalf("нечитаемые исключения не должны мешать спеку собраться: state=%v bridges=%v", state, spec.Bridges)
+	}
+	first := svc.v6SpecErrLogged
+	if !strings.Contains(first, "подсети") {
+		t.Fatalf("ошибка разбора исключений обязана быть замечена, got %q", first)
+	}
+	svc.desiredV6(context.Background(), sr, "0xffffaab", true)
+	if svc.v6SpecErrLogged != first {
+		t.Errorf("та же ошибка не должна перезаписываться: %q → %q", first, svc.v6SpecErrLogged)
+	}
+
+	sr.BypassExtraSubnets = "2001:db8::/48"
+	svc.desiredV6(context.Background(), sr, "0xffffaab", true)
+	if svc.v6SpecErrLogged != "" {
+		t.Errorf("исправленный список обязан снять запомненную ошибку: %q", svc.v6SpecErrLogged)
+	}
+}
+
+// IPv6-подсети в исключениях принимаются, только пока v6-слой работает.
+func TestCheckV6SubnetsAccepted(t *testing.T) {
+	tproxy := func(family, subnets string) storage.SingboxRouterSettings {
+		return storage.SingboxRouterSettings{RoutingMode: "tproxy", InterceptFamily: family, BypassExtraSubnets: subnets}
+	}
+	mode := func(mode, family, subnets string) storage.SingboxRouterSettings {
+		return storage.SingboxRouterSettings{RoutingMode: mode, InterceptFamily: family, BypassExtraSubnets: subnets}
+	}
+	const v6 = "10.0.0.0/8, 2001:db8::/48"
+	cases := []struct {
+		name      string
+		next, cur storage.SingboxRouterSettings
+		reject    bool
+	}{
+		{"слой работает — принимаем", tproxy(FamilyBoth, v6), tproxy(FamilyBoth, ""), false},
+		{"ipv6_only — принимаем", tproxy(FamilyIPv6Only, v6), tproxy(FamilyIPv4Only, ""), false},
+		{"ipv4_only + новая IPv6-подсеть — отказ", tproxy(FamilyIPv4Only, v6), tproxy(FamilyIPv4Only, ""), true},
+		{"пустой режим читается как tproxy", mode("", FamilyBoth, v6), mode("", FamilyBoth, ""), false},
+		{"только IPv4-подсети — принимаем всегда", tproxy(FamilyIPv4Only, "10.0.0.0/8"), tproxy(FamilyIPv4Only, ""), false},
+		{"выключение IPv6 при оставшихся IPv6-подсетях — отказ", tproxy(FamilyIPv4Only, v6), tproxy(FamilyBoth, v6), true},
+		{"fakeip-tun + новая IPv6-подсеть — отказ", mode("fakeip-tun", FamilyBoth, v6), mode("fakeip-tun", FamilyBoth, ""), true},
+		{"policy-tun + новая IPv6-подсеть — отказ", mode("policy-tun", FamilyBoth, v6), mode("policy-tun", FamilyBoth, ""), true},
+		{"остаток после смены режима, список не менялся — пропускаем", mode("fakeip-tun", FamilyBoth, v6), mode("fakeip-tun", FamilyBoth, v6), false},
+		{"остаток, но IPv6-часть изменили — отказ", mode("fakeip-tun", FamilyBoth, v6+", 2001:db8:1::/48"), mode("fakeip-tun", FamilyBoth, v6), true},
+		{"остаток, поменяли только IPv4-часть — пропускаем", mode("fakeip-tun", FamilyBoth, "192.168.0.0/16, 2001:db8::/48"), mode("fakeip-tun", FamilyBoth, v6), false},
+		{"остаток убрали — принимаем", mode("fakeip-tun", FamilyBoth, "10.0.0.0/8"), mode("fakeip-tun", FamilyBoth, v6), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := checkV6SubnetsAccepted(c.next, c.cur)
+			if c.reject != (err != nil) {
+				t.Fatalf("err = %v, отказ ожидался: %v", err, c.reject)
+			}
+			if err != nil && !errors.Is(err, ErrIPv6BypassInactive) {
+				t.Errorf("отказ обязан оборачивать ErrIPv6BypassInactive: %v", err)
+			}
+		})
+	}
+}
+
+// UpdateSettings: IPv6-подсеть при "ipv4_only" отвергается и не сохраняется —
+// иначе запись молча ничего не делала бы.
+func TestUpdateSettings_V6SubnetWithoutV6Layer_Rejected(t *testing.T) {
+	svc := newQoSLifecycleService(t, storage.SingboxRouterSettings{WANAutoDetect: true})
+
+	err := svc.UpdateSettings(context.Background(), storage.SingboxRouterSettings{
+		WANAutoDetect:      true,
+		BypassExtraSubnets: "10.0.0.0/8, 2001:db8::/48",
+	})
+	if !errors.Is(err, ErrIPv6BypassInactive) {
+		t.Fatalf("err = %v, want ErrIPv6BypassInactive", err)
+	}
+	if !strings.Contains(err.Error(), "2001:db8::/48") {
+		t.Errorf("в тексте отказа обязана быть названа подсеть: %v", err)
+	}
+	all, err := svc.deps.Settings.Load()
+	if err != nil {
+		t.Fatalf("Settings.Load: %v", err)
+	}
+	if all.SingboxRouter.BypassExtraSubnets != "" {
+		t.Errorf("отвергнутый список сохранён: %q", all.SingboxRouter.BypassExtraSubnets)
+	}
+
+	// IPv4-подсети при том же режиме проходят как раньше.
+	if err := svc.UpdateSettings(context.Background(), storage.SingboxRouterSettings{
+		WANAutoDetect:      true,
+		BypassExtraSubnets: "10.0.0.0/8",
+	}); err != nil {
+		t.Fatalf("IPv4-подсеть при ipv4_only обязана сохраняться: %v", err)
+	}
+}
+
+// Остаток после смены режима: список принят раньше, слой больше не работает.
+// Сохранение прочих настроек не упирается в старые записи, а статус говорит,
+// что они не действуют.
+func TestInertV6SubnetsIssue(t *testing.T) {
+	sr := storage.SingboxRouterSettings{
+		Enabled: true, RoutingMode: "fakeip-tun", InterceptFamily: FamilyBoth,
+		BypassExtraSubnets: "10.0.0.0/8, 2001:db8::/48",
+	}
+	issue, ok := inertV6SubnetsIssue(sr)
+	if !ok || issue.Severity != "warning" || issue.Kind != "ipv6-bypass-inert" || !strings.Contains(issue.Message, "2001:db8::/48") {
+		t.Fatalf("ожидалось предупреждение с подсетью, got %+v ok=%v", issue, ok)
+	}
+
+	sr.RoutingMode = "tproxy"
+	if _, ok := inertV6SubnetsIssue(sr); ok {
+		t.Error("при работающем слое предупреждения быть не должно")
+	}
+	sr.InterceptFamily = FamilyIPv4Only
+	if _, ok := inertV6SubnetsIssue(sr); !ok {
+		t.Error("tproxy + ipv4_only с IPv6-подсетями — предупреждение обязательно")
+	}
+	sr.BypassExtraSubnets = "10.0.0.0/8"
+	if _, ok := inertV6SubnetsIssue(sr); ok {
+		t.Error("без IPv6-подсетей предупреждать не о чем")
+	}
+	sr.BypassExtraSubnets = "2001:db8::/48"
+	sr.Enabled = false
+	if _, ok := inertV6SubnetsIssue(sr); ok {
+		t.Error("выключенный роутер — без предупреждения")
+	}
+}
+
+// Отказ IPv6-половины geoip-обхода не делает сбойным статус набора: IPv4-набор
+// собран и действует. Причина уходит отдельным предупреждением.
+func TestStoreBypassSetOutcome_V6HalfFailureIsWarningNotError(t *testing.T) {
+	svc := &ServiceImpl{}
+	sr := storage.SingboxRouterSettings{
+		Enabled: true, RoutingMode: "tproxy", InterceptFamily: FamilyBoth,
+		BypassGeoIPTags: []string{"geoip:cn"},
+	}
+
+	svc.storeBypassSetOutcome(bypassset.PopulateResult{
+		EntryCount: 7, CountOK: true,
+		Err6: errors.New("populate staging: ipset restore: exit status 1"),
+	}, nil)
+	count, ok, _, lastErr, _ := svc.BypassSetStatus()
+	if lastErr != "" {
+		t.Errorf("статус набора не должен показывать сбой при собранном IPv4-наборе: %q", lastErr)
+	}
+	if count != 7 || !ok {
+		t.Errorf("размер IPv4-набора обязан остаться фактом: %d/%v", count, ok)
+	}
+	issue, has := svc.bypass6Issue(sr)
+	if !has || issue.Severity != "warning" || issue.Kind != "ipv6-bypass-set" || !strings.Contains(issue.Message, "ipset restore") {
+		t.Fatalf("ожидалось предупреждение об IPv6-половине, got %+v has=%v", issue, has)
+	}
+
+	// Обе половины собраны: размер — сумма, предупреждение снято.
+	svc.storeBypassSetOutcome(bypassset.PopulateResult{EntryCount: 7, CountOK: true, EntryCount6: 5, Count6OK: true}, nil)
+	if count, ok, _, _, _ := svc.BypassSetStatus(); count != 12 || !ok {
+		t.Errorf("размер обязан быть суммой по обоим наборам: %d/%v", count, ok)
+	}
+	if _, has := svc.bypass6Issue(sr); has {
+		t.Error("после удачного наполнения предупреждение обязано уйти")
+	}
+
+	// Счётчик IPv6-набора не получен — в сумму он не входит, IPv4 остаётся фактом.
+	svc.storeBypassSetOutcome(bypassset.PopulateResult{EntryCount: 7, CountOK: true, EntryCount6: 0, Count6OK: false}, nil)
+	if count, ok, _, _, _ := svc.BypassSetStatus(); count != 7 || !ok {
+		t.Errorf("неизвестный размер IPv6-набора не должен портить счётчик IPv4: %d/%v", count, ok)
+	}
+}
+
+// Файлы правил пишутся после успешного restore, поэтому после сорванной
+// установки их на диске нет — а часть правил в ядре остаться могла (restore
+// коммитит по таблицам). Выключение перехвата IPv6 обязано снести слой и в
+// этом случае, хотя ни снимка, ни файлов нет.
+func TestReconcileInstalled_V6InstallFailedThenOff_StillUninstalls(t *testing.T) {
+	svc, fe, _, sr := newV6ReconcileService(t, FamilyBoth)
+	fe.restoreErr = errors.New("ip6tables-restore: line 4 failed")
+	mustReconcile(t, svc, sr)
+	if svc.appliedV6 != nil || fe.rulesWrites != 0 {
+		t.Fatalf("сорванная установка не должна оставлять ни снимка, ни файлов: applied=%v rules=%d", svc.appliedV6 != nil, fe.rulesWrites)
+	}
+
+	sr.InterceptFamily = FamilyIPv4Only
+	mustReconcile(t, svc, sr)
+	if fe.cleanups != 1 || !hasCall(fe.ip6t, "-t", "mangle", "-X", Chain6Name) {
+		t.Errorf("слой обязан быть снесён и без файлов правил: cleanups=%d calls=%v", fe.cleanups, fe.ip6t)
+	}
+
+	// Снесли — забыли: следующие сверки ip6tables уже не трогают.
+	n := len(fe.ip6t)
+	mustReconcile(t, svc, sr)
+	if len(fe.ip6t) != n || fe.cleanups != 1 {
+		t.Errorf("повторный снос не нужен: calls %d → %d, cleanups=%d", n, len(fe.ip6t), fe.cleanups)
 	}
 }

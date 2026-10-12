@@ -77,6 +77,11 @@ var (
 	// роутере нет (в Entware это отдельный пакет). Mapped to 400 by the API.
 	ErrIP6TablesMissing = errors.New("для перехвата IPv6 нужен пакет ip6tables: opkg install ip6tables")
 
+	// ErrIPv6BypassInactive: в исключениях по подсетям есть IPv6-адреса, а
+	// v6-слой при этих настройках не работает (режим не TProxy или семейство
+	// без IPv6) — правило под них поставить некому. Mapped to 400 by the API.
+	ErrIPv6BypassInactive = errors.New("IPv6-адреса в исключениях по подсетям действуют только при перехвате IPv6 (режим TProxy, семейства «IPv4 и IPv6» или «Только IPv6»)")
+
 	// ErrTransitionInProgress: PUT настроек лёг в окно живого SwitchRoutingMode.
 	// Save отсюда откатил бы persistMode(target), и Enable перехода поднялся бы
 	// по чужому режиму. Не ждём (переход держит transitionMu минуты) — честно

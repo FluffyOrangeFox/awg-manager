@@ -283,6 +283,9 @@ func (h *SingboxRouterHandler) handleErr(w http.ResponseWriter, action string, e
 	case errors.Is(err, router.ErrIP6TablesMissing):
 		// 400: выбран перехват IPv6, а пакета ip6tables на роутере нет.
 		response.Error(w, err.Error(), "IP6TABLES_MISSING")
+	case errors.Is(err, router.ErrIPv6BypassInactive):
+		// 400: IPv6-подсети в исключениях при неработающем перехвате IPv6.
+		response.Error(w, err.Error(), "IPV6_BYPASS_INACTIVE")
 	case errors.Is(err, router.ErrDNSChainTagReserved):
 		// 400: пространство тегов awgm-dns-* принадлежит оверлею DNS-пресета —
 		// занять его пользовательским правилом нельзя.

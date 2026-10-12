@@ -20,6 +20,7 @@ type ingressRecorder struct {
 
 func (r *ingressRecorder) tables() *IPTables {
 	return &IPTables{
+		v6: nopV6{},
 		runIPTables: func(_ context.Context, args ...string) error {
 			r.ipt = append(r.ipt, args)
 			return nil

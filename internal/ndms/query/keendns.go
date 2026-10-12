@@ -124,7 +124,10 @@ func parseKeenDNS(raw []byte) *KeenDNSInfo {
 		Booked  string `json:"booked"`
 		Domain  string `json:"domain"`
 		Address string `json:"address"`
-		// address6 — тот же ключ, что печатает `show ndns` рядом с address.
+		// address6 — ключ верхнего уровня рядом с address; снят с живого
+		// ответа /rci/show/ndns (testdata/show_ndns_kn1811.json). Одноимённые
+		// ключи внутри `ttp` — адреса WAN для облачного туннеля, сюда они не
+		// попадают: поля объявлены только на верхнем уровне.
 		Address6 string `json:"address6"`
 		Access   string `json:"access"`
 	}

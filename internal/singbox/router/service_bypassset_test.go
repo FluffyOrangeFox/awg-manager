@@ -553,6 +553,7 @@ func TestDisable_TearsDownBypassSetWithoutTagSnapshot(t *testing.T) {
 		}),
 		Policies: &fakeAccessPolicyProvider{mark: "0xffffaaa"},
 		IPTables: &IPTables{
+			v6:             nopV6{},
 			runIPTables:    func(context.Context, ...string) error { return nil },
 			runIPTablesOut: func(context.Context, ...string) (string, error) { return "", nil },
 			runIP:          func(context.Context, ...string) error { return nil },

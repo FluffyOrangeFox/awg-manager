@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,7 +25,7 @@ import (
 type v6WantState int
 
 const (
-	// v6Off — слой выключен настройкой (или его швы не подключены).
+	// v6Off — слой выключен настройкой.
 	v6Off v6WantState = iota
 	// v6On — слой включён, спек собран.
 	v6On
@@ -101,13 +102,82 @@ func (s *ServiceImpl) v6Issue(sr storage.SingboxRouterSettings) (Issue, bool) {
 	return Issue{Severity: "warning", Kind: "ipv6-intercept", Message: "Перехват IPv6: " + *msg}, true
 }
 
+// v6LayerActive — работает ли v6-слой при этих настройках: он есть только в
+// режиме tproxy и только при семействе с IPv6.
+func v6LayerActive(sr storage.SingboxRouterSettings) bool {
+	tproxy := sr.RoutingMode == "" || sr.RoutingMode == "tproxy"
+	return tproxy && familyHasV6(sr.InterceptFamily)
+}
+
+// checkV6SubnetsAccepted решает, можно ли сохранить next при сохранённых cur:
+// IPv6-подсети в исключениях допустимы, только пока v6-слой работает — иначе
+// правило под них поставить некому, и запись молча ничего не делала бы.
+//
+// Одно послабление: если слой не работал и раньше, а IPv6-часть списка не
+// менялась, запись проходит. Так получается после смены режима (она идёт
+// мимо PUT настроек и список не трогает): прочие правки настроек не должны
+// упираться в старые записи. О таких записях говорит inertV6SubnetsIssue.
+func checkV6SubnetsAccepted(next, cur storage.SingboxRouterSettings) error {
+	if v6LayerActive(next) {
+		return nil
+	}
+	want, err := resolveBypassSubnets6(next.BypassExtraSubnets)
+	if err != nil || len(want) == 0 {
+		// Нечитаемый список отвергает Normalize — своим текстом.
+		return nil
+	}
+	if !v6LayerActive(cur) {
+		if had, err := resolveBypassSubnets6(cur.BypassExtraSubnets); err == nil && slices.Equal(had, want) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: %s", ErrIPv6BypassInactive, strings.Join(want, ", "))
+}
+
+// inertV6SubnetsIssue — предупреждение для статуса: в исключениях остались
+// IPv6-подсети, а v6-слой не работает (сменили режим). Они не действуют.
+func inertV6SubnetsIssue(sr storage.SingboxRouterSettings) (Issue, bool) {
+	if !sr.Enabled || v6LayerActive(sr) {
+		return Issue{}, false
+	}
+	v6, err := resolveBypassSubnets6(sr.BypassExtraSubnets)
+	if err != nil || len(v6) == 0 {
+		return Issue{}, false
+	}
+	return Issue{
+		Severity: "warning",
+		Kind:     "ipv6-bypass-inert",
+		Message: "В исключениях по подсетям есть IPv6-адреса (" + strings.Join(v6, ", ") +
+			"), но перехват IPv6 не работает — они не действуют. Включите перехват IPv6 (режим TProxy) или удалите их.",
+	}, true
+}
+
+// bypass6Issue — предупреждение для статуса: IPv6-половина geoip-обхода не
+// собрана. Статус самого набора при этом сбоем не становится — IPv4-набор
+// собран и действует (см. storeBypassSetOutcome).
+func (s *ServiceImpl) bypass6Issue(sr storage.SingboxRouterSettings) (Issue, bool) {
+	if !sr.Enabled || !v6LayerActive(sr) || len(sr.BypassGeoIPTags) == 0 {
+		return Issue{}, false
+	}
+	msg := s.bypass6Problem.Load()
+	if msg == nil {
+		return Issue{}, false
+	}
+	return Issue{
+		Severity: "warning",
+		Kind:     "ipv6-bypass-set",
+		Message:  "geoip-обход IPv6: набор не собран (" + *msg + "). IPv4-набор собран и действует.",
+	}, true
+}
+
 // desiredV6 собирает желаемый спек v6-слоя из настроек и топологии роутера.
 // Классов QoS в нём ещё нет: их проекцию вызывающий дописывает сам, после
 // проверки xt_dscp (см. buildV6Spec).
 func (s *ServiceImpl) desiredV6(ctx context.Context, sr storage.SingboxRouterSettings, mark string, policyMode bool) (V6Spec, v6WantState) {
-	if !familyHasV6(sr.InterceptFamily) || !s.deps.IPTables.hasV6() {
+	if !familyHasV6(sr.InterceptFamily) {
 		return V6Spec{}, v6Off
 	}
+	s.reserveV6Ports()
 	topo, err := collectV6Topology()
 	if err != nil {
 		s.v6Warn("не удалось прочитать адреса IPv6 роутера: " + err.Error())
@@ -120,20 +190,51 @@ func (s *ServiceImpl) desiredV6(ctx context.Context, sr storage.SingboxRouterSet
 	if policyMode && len(sr.IngressInterfaces) > 0 {
 		ingress = s.resolveIngressInterfaces(ctx, sr.IngressInterfaces)
 	}
-	spec, skipped := buildV6Spec(sr, mark, policyMode, topo, ingress, s.keenDNSBypass6())
+	spec, skipped, specErr := buildV6Spec(sr, mark, policyMode, topo, ingress, s.keenDNSBypass6())
 	if list := strings.Join(skipped, ", "); list != s.v6SkippedLogged {
 		s.v6SkippedLogged = list
 		if list != "" {
 			s.appLog.Warn("ipv6", "", "мосты без порта для перехвата IPv6 пропущены: "+list)
 		}
 	}
+	// Настройки проходят валидацию на записи, так что сюда ошибка разбора
+	// доходит только из правленного руками settings.json. Спек при этом
+	// собран без нечитаемой части — перехват встаёт, но исключения из неё не
+	// действуют, и молчать об этом нельзя.
+	msg := ""
+	if specErr != nil {
+		msg = specErr.Error()
+	}
+	if msg != s.v6SpecErrLogged {
+		s.v6SpecErrLogged = msg
+		if msg != "" {
+			s.appLog.Warn("ipv6", "", "исключения перехвата IPv6 разобраны не полностью: "+msg)
+		}
+	}
 	return spec, v6On
+}
+
+// reserveV6ListenPorts — шов над резервом портов v6-слоя.
+var reserveV6ListenPorts = ReserveV6ListenPorts
+
+// reserveV6Ports убирает порты v6-слоя из эфемерного пула ядра — один раз за
+// жизнь процесса и только когда перехват IPv6 включён. Отказ не мешает слою
+// встать (как и резерв v4-портов на старте демона), но попадает в журнал.
+// Попытка одна, без повтора на каждой сверке: sysctl либо пишется, либо нет.
+func (s *ServiceImpl) reserveV6Ports() {
+	if s.v6PortsReserved {
+		return
+	}
+	s.v6PortsReserved = true
+	if err := reserveV6ListenPorts(); err != nil {
+		s.appLog.Warn("ipv6", "", "не удалось зарезервировать порты инбаундов IPv6: "+err.Error())
+	}
 }
 
 // healV6Inbounds приводит инбаунды v6-слоя в применённом конфиге к спеку.
 // Возвращает true, если конфиг переписан (sing-box перечитает его).
 func (s *ServiceImpl) healV6Inbounds(ctx context.Context, sr storage.SingboxRouterSettings, want V6Spec, state v6WantState) (bool, error) {
-	if state == v6Unknown || !s.deps.IPTables.hasV6() {
+	if state == v6Unknown {
 		return false, nil
 	}
 	// Выключенный слой проверяем один раз за жизнь процесса: при "ipv4_only"
@@ -189,7 +290,7 @@ func (s *ServiceImpl) waitForV6Sockets(ctx context.Context, want V6Spec, timeout
 // Вызывается только под transitionMu (Enable и reconcileInstalled).
 func (s *ServiceImpl) syncV6(ctx context.Context, want V6Spec, state v6WantState, engineDown, force, inboundsHealed bool) {
 	it := s.deps.IPTables
-	if !it.hasV6() || state == v6Unknown {
+	if state == v6Unknown {
 		return
 	}
 	if state == v6Off {
@@ -244,11 +345,13 @@ func (s *ServiceImpl) syncV6(ctx context.Context, want V6Spec, state v6WantState
 			// Часть таблиц могла примениться — снимок неизвестен, следующая
 			// сверка переустановит.
 			s.appliedV6 = nil
+			s.v6KernelUnknown = true
 			s.v6Warn("не удалось поставить правила перехвата IPv6: " + err.Error())
 			return
 		}
 		prev := s.appliedV6
 		s.appliedV6 = &want
+		s.v6KernelUnknown = false
 		switch {
 		case want.BypassGeoIPSet && (prev == nil || !prev.BypassGeoIPSet):
 			// Набор только что появился в правилах и пуст — наполняем. Общий
@@ -303,6 +406,9 @@ func (s *ServiceImpl) engageBlackhole6(ctx context.Context, want V6Spec, st v6St
 	}
 	first := s.appliedBlackhole6 == nil
 	if err := s.deps.IPTables.InstallBlackhole6(ctx, want); err != nil {
+		// Блокировка могла встать в ядре без файла правил (отказ записи после
+		// restore) — снос обязан её найти.
+		s.v6KernelUnknown = true
 		s.appLog.Warn("ipv6", "", "не удалось поставить fail-closed блокировку IPv6: "+err.Error())
 		return
 	}
@@ -323,17 +429,14 @@ func (s *ServiceImpl) engageBlackhole6(ctx context.Context, want V6Spec, st v6St
 // Без обращений к ip6tables, когда сносить нечего, — это горячий путь каждого
 // тика при "ipv4_only".
 func (s *ServiceImpl) teardownV6(ctx context.Context, reason string) {
-	it := s.deps.IPTables
-	if !it.hasV6() {
-		return
-	}
-	if s.appliedV6 == nil && s.appliedBlackhole6 == nil && !v6RulesFilePresent() && !blackhole6FilePresent() {
+	if s.appliedV6 == nil && s.appliedBlackhole6 == nil && !s.v6KernelUnknown && !v6RulesFilePresent() && !blackhole6FilePresent() {
 		return
 	}
 	// Uninstall6 снимает и блокировку.
-	it.Uninstall6(ctx)
+	s.deps.IPTables.Uninstall6(ctx)
 	s.appliedV6 = nil
 	s.appliedBlackhole6 = nil
+	s.v6KernelUnknown = false
 	// Только после Uninstall6: пока правило `--match-set` в ядре, набор занят.
 	if err := dropBypassSet6(ctx); err != nil {
 		s.appLog.Warn("ipv6", "", "geoip-обход IPv6: снос набора: "+err.Error())
@@ -343,11 +446,32 @@ func (s *ServiceImpl) teardownV6(ctx context.Context, reason string) {
 	}
 }
 
+// sweepV6 сносит v6-слой безусловно. Для путей, где режим tproxy не активен
+// (fakeip-tun, policy-tun) и где v4-остатки прежнего режима снимает такой же
+// безусловный Uninstall: слой живёт только в tproxy, но его цепочки, хук и
+// файлы правил переживают и рестарт демона, и аварийную смену режима, а в
+// чужом режиме их никто не сверяет. teardownV6 здесь не годится: он судит по
+// снимкам в памяти и файлам правил, а сирота без файла (демон умер посреди
+// Uninstall6) так и осталась бы заворачивать IPv6 в порт без слушателя.
+//
+// Вызывается под transitionMu, как и остальные правки состояния слоя.
+func (s *ServiceImpl) sweepV6(ctx context.Context) {
+	s.deps.IPTables.Uninstall6(ctx)
+	s.appliedV6 = nil
+	s.appliedBlackhole6 = nil
+	s.v6KernelUnknown = false
+	// Только после Uninstall6: пока правило `--match-set` в ядре, набор занят.
+	if err := dropBypassSet6(ctx); err != nil {
+		s.appLog.Warn("ipv6", "", "geoip-обход IPv6: снос набора: "+err.Error())
+	}
+	s.v6Clear()
+}
+
 // bypassSet6Wanted — нужен ли IPv6-набор обхода по текущим настройкам. Читает
 // настройки заново: наполнение идёт асинхронно и минуты, семейство за это
 // время могли переключить.
 func (s *ServiceImpl) bypassSet6Wanted() bool {
-	if s.deps.Settings == nil || !s.deps.IPTables.hasV6() {
+	if s.deps.Settings == nil {
 		return false
 	}
 	st, err := s.deps.Settings.Get()

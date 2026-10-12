@@ -2,7 +2,9 @@ package query
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -134,5 +136,61 @@ func TestKeenDNS_AccessGate(t *testing.T) {
 	var absent *KeenDNSInfo
 	if absent.DirectAccess() {
 		t.Error("у отсутствующего KeenDNS прямого доступа быть не может")
+	}
+}
+
+// Фикстура — ответ GET /rci/show/ndns с живого роутера (Keenetic Ultra
+// KN-1811, KeeneticOS 5.2 Beta 0; прямого доступа по имени на нём нет —
+// `access` пуст, `ttp.direct` = false). Набор ключей и типы значений сняты
+// как есть; ВСЕ значения, относящиеся к конкретному роутеру, заменены: имя,
+// зона, xns, имя WAN-интерфейса и адреса (на документационные диапазоны).
+//
+// Фиксирует две вещи. Ключ `address6` стоит на верхнем уровне рядом с
+// `address` — его и читает разбор. И адреса в `ttp` — это адреса
+// WAN-интерфейса для облачного туннеля, а не адрес доступа по имени: в обход
+// пресета keendns они попадать не должны.
+func TestParseKeenDNS_RealShowNdnsResponse(t *testing.T) {
+	raw, err := os.ReadFile("testdata/show_ndns_kn1811.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		t.Fatalf("фикстура — невалидный JSON: %v", err)
+	}
+	for _, k := range []string{"booked", "domain", "address", "address6", "access", "access6"} {
+		if _, ok := keys[k]; !ok {
+			t.Errorf("в ответе show ndns нет ключа верхнего уровня %q", k)
+		}
+	}
+
+	info := parseKeenDNS(raw)
+	if info == nil {
+		t.Fatal("разбор вернул nil")
+	}
+	if info.Domain != "myrouter.keenetic.pro" || !info.Enabled {
+		t.Errorf("Domain=%q Enabled=%v, want myrouter.keenetic.pro/true", info.Domain, info.Enabled)
+	}
+	// Прямого доступа нет: адреса доступа пусты в обоих семействах, и адреса
+	// из `ttp` на их место не подставляются.
+	if info.Address != "" || info.Address6 != "" {
+		t.Errorf("Address=%q Address6=%q, want оба пустые (адреса ttp — не адрес доступа)", info.Address, info.Address6)
+	}
+	if info.DirectAccess() {
+		t.Error("пустой access — не прямой доступ")
+	}
+}
+
+// Прямой доступ: `address` и `address6` заполнены — оба доходят до вызывающего.
+// Значения синтетические (на стендовом роутере прямого доступа нет), ключи —
+// те же, что в настоящем ответе выше.
+func TestParseKeenDNS_DirectAccessAddresses(t *testing.T) {
+	info := parseKeenDNS([]byte(`{"booked":"example","domain":"keenetic.pro","address":"203.0.113.72","address6":" 2001:db8::72 ","access":"direct","access6":"direct"}`))
+	if info == nil {
+		t.Fatal("разбор вернул nil")
+	}
+	if info.Address != "203.0.113.72" || info.Address6 != "2001:db8::72" {
+		t.Errorf("Address=%q Address6=%q", info.Address, info.Address6)
 	}
 }

@@ -61,6 +61,7 @@ func TestApplyDataDir_RedirectsRouterPaths(t *testing.T) {
 		"netfilter6NatRulesPath":    filepath.Join(sub, "router-netfilter6-nat.rules"),
 		"bypassSave6Path":           filepath.Join(sub, "bypass6.ipset"),
 		"netfilter6BlackholePath":   filepath.Join(sub, "router-blackhole6.rules"),
+		"netfilterCtClean6Path":     filepath.Join(sub, "awgm-ctclean6.sh"),
 	}
 	got := router.DataDirPaths()
 	if len(got) != len(want) {

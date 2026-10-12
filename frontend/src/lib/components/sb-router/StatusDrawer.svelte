@@ -76,6 +76,12 @@
     activeMode ?? pickedMode ?? ($settings?.routingMode === 'policy-tun' ? 'policy-tun' : 'tproxy'),
   );
   let policyTunMode = $derived(targetMode === 'policy-tun');
+  // Перехват IPv6 есть только в TPROXY и только при семействе с IPv6. От него
+  // зависит, принимаются ли IPv6-подсети в исключениях (бэкенд без него их
+  // отвергает).
+  let v6Intercept = $derived(
+    !policyTunMode && (cfg?.interceptFamily === 'both' || cfg?.interceptFamily === 'ipv6_only'),
+  );
   // KeeneticOS 4.x не знает интерфейсов OpkgTun — policy-tun там не поднять.
   let tunSupported = $derived(opkgTunSupported($systemInfo.data));
 
@@ -230,8 +236,9 @@
     const v = el.value;
     if (v !== 'ipv4_only' && v !== 'both' && v !== 'ipv6_only') return;
     await applyPatch({ interceptFamily: v });
-    // Бэкенд отвергает IPv6 без пакета ip6tables: возвращаем сохранённое
-    // значение, иначе список показывал бы режим, который не применился.
+    // Бэкенд отвергает IPv6 без пакета ip6tables, а выключение IPv6 — пока в
+    // исключениях остаются IPv6-подсети: возвращаем сохранённое значение,
+    // иначе список показывал бы режим, который не применился.
     if (lastError) el.value = cfg?.interceptFamily ?? 'ipv4_only';
   }
   function onCacheLocationChange(e: Event) {
@@ -561,7 +568,7 @@
         {/if}
         <div class="field">
           <label class="lbl" for="ed-subnets-input">{m.sb_router_status_extra_subnets()}</label>
-          <SubnetChipsInput inputId="ed-subnets-input" value={cfg.bypassExtraSubnets ?? ''} onChange={(v) => void applyPatch({ bypassExtraSubnets: v })} />
+          <SubnetChipsInput inputId="ed-subnets-input" value={cfg.bypassExtraSubnets ?? ''} allowIPv6={v6Intercept} onChange={(v) => void applyPatch({ bypassExtraSubnets: v })} />
         </div>
         <p class="hint">{m.sb_router_status_subnets_hint()}</p>
         <!-- Набор AWGM-BYPASS живёт только в TPROXY-перехвате: в policy-tun

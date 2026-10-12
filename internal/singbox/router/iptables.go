@@ -102,6 +102,7 @@ func SetDataDir(dir string) {
 	netfilter6NatRulesPath = filepath.Join(sub, "router-netfilter6-nat.rules")
 	bypassSave6Path = filepath.Join(sub, "bypass6.ipset")
 	netfilter6BlackholePath = filepath.Join(sub, "router-blackhole6.rules")
+	netfilterCtClean6Path = filepath.Join(sub, "awgm-ctclean6.sh")
 }
 
 // DataDirPaths — текущие пути, производные от каталога данных. Существует для
@@ -120,6 +121,7 @@ func DataDirPaths() map[string]string {
 		"netfilter6NatRulesPath":    netfilter6NatRulesPath,
 		"bypassSave6Path":           bypassSave6Path,
 		"netfilter6BlackholePath":   netfilter6BlackholePath,
+		"netfilterCtClean6Path":     netfilterCtClean6Path,
 	}
 }
 
@@ -147,6 +149,7 @@ func RestoreDataDirPaths(p map[string]string) {
 	netfilter6NatRulesPath = p["netfilter6NatRulesPath"]
 	bypassSave6Path = p["bypassSave6Path"]
 	netfilter6BlackholePath = p["netfilter6BlackholePath"]
+	netfilterCtClean6Path = p["netfilterCtClean6Path"]
 }
 
 // Mutable in tests via t.Cleanup so they can redirect into a tmp dir.
@@ -916,19 +919,9 @@ type IPTables struct {
 	cleanupBlackhole        func()
 	runCtClean              func(ctx context.Context)
 
-	// Швы v6-слоя (iptables6.go). nil в тестовых сборках, заполняющих только
-	// v4-поля: hasV6 тогда false, и слой молча выключен.
-	restoreNoflush6 restoreNoflushFn
-	runIP6Tables    runFn
-	runIP6TablesOut runOutFn
-	persistRules6   persistRulesFn
-	persistHook6    func() error
-	cleanupHook6    func()
-	evictFlows6     func(ctx context.Context, spec V6Spec)
-	// persistBlackhole6 / cleanupBlackhole6 — файл правил fail-closed
-	// блокировки IPv6.
-	persistBlackhole6 persistFn
-	cleanupBlackhole6 func()
+	// v6 — системная сторона v6-слоя (iptables6.go). Одним интерфейсом, а не
+	// россыпью полей: см. v6Backend.
+	v6 v6Backend
 }
 
 func NewIPTables() *IPTables {
@@ -965,16 +958,7 @@ func NewIPTables() *IPTables {
 			_, _ = sysexec.Run(ctx, netfilterCtCleanPath)
 		},
 
-		restoreNoflush6: sysiptables.RestoreNoflush6,
-		runIP6Tables:    sysiptables.Run6,
-		runIP6TablesOut: sysiptables.RunOutput6,
-		persistRules6:   writeNetfilter6RulesFiles,
-		persistHook6:    writeNetfilter6Hook,
-		cleanupHook6:    removeNetfilter6Files,
-		evictFlows6:     evictPolicyFlows6,
-
-		persistBlackhole6: writeNetfilter6BlackholeFile,
-		cleanupBlackhole6: removeNetfilter6BlackholeFile,
+		v6: systemV6{},
 	}
 }
 

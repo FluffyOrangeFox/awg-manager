@@ -272,6 +272,25 @@ func TestRouterPutSettings_QoSClassesInvalid_Returns400(t *testing.T) {
 	}
 }
 
+// IPv6-подсети в исключениях при неработающем перехвате IPv6 — 400 со своим
+// кодом и текстом, называющим подсеть: интерфейс показывает его как есть.
+func TestRouterPutSettings_IPv6BypassInactive_Returns400(t *testing.T) {
+	svc := &mockRouterSvc{updateSettingsErr: fmt.Errorf("%w: 2001:db8::/48", router.ErrIPv6BypassInactive)}
+	h := newMockRouterHandler(svc)
+	req := httptest.NewRequest(http.MethodPut, "/api/singbox/router/settings",
+		strings.NewReader(`{"wanAutoDetect":true,"bypassExtraSubnets":"2001:db8::/48"}`))
+	rr := httptest.NewRecorder()
+	h.PutSettings(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+	for _, want := range []string{"IPV6_BYPASS_INACTIVE", "2001:db8::/48"} {
+		if !strings.Contains(rr.Body.String(), want) {
+			t.Errorf("want %q in body: %s", want, rr.Body.String())
+		}
+	}
+}
+
 func TestRouterPutSettings_RoundTripsQoSClasses(t *testing.T) {
 	svc := &mockRouterSvc{}
 	h := newMockRouterHandler(svc)

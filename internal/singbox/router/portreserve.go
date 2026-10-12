@@ -16,13 +16,17 @@ const reservedPortsSysctl = "/proc/sys/net/ipv4/ip_local_reserved_ports"
 // routerListenPorts перечисляет фиксированные порты инбаундов sb-router.
 // Источник — те же константы, что рендерят правила iptables и конфиг
 // sing-box, поэтому список не может разъехаться с реальными слушателями.
+//
+// Порты v6-слоя сюда не входят: они резервируются, только когда перехват
+// IPv6 включён (ReserveV6ListenPorts), — при "ipv4_only" слой не оставляет на
+// роутере ничего, в том числе и в этом sysctl.
 func routerListenPorts() []int {
 	ports := []int{TPROXYPort, RedirectPort}
 	for slot := 0; slot < MaxQoSClasses; slot++ {
 		tp, rp := QoSClassPorts(slot)
 		ports = append(ports, tp, rp)
 	}
-	return append(ports, v6ListenPorts()...)
+	return ports
 }
 
 // ReserveListenPorts убирает порты инбаундов sb-router из эфемерного пула
@@ -40,7 +44,18 @@ func routerListenPorts() []int {
 func ReserveListenPorts() error { return reserveListenPortsAt(reservedPortsSysctl) }
 
 func reserveListenPortsAt(path string) error {
-	ports := routerListenPorts()
+	return reservePortsAt(path, routerListenPorts())
+}
+
+// ReserveV6ListenPorts делает то же для портов v6-слоя. Зовётся слоем при
+// включении перехвата IPv6, до того как его инбаунды попадут в конфиг
+// sing-box. Обратно порты не убираются: значение sysctl общее с чужими
+// резервами, а до перезагрузки роутера лишняя запись ничему не мешает.
+func ReserveV6ListenPorts() error {
+	return reservePortsAt(reservedPortsSysctl, v6ListenPorts())
+}
+
+func reservePortsAt(path string, ports []int) error {
 	cur, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {

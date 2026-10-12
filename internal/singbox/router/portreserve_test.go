@@ -13,16 +13,6 @@ func TestRouterListenPortsCoversEveryInbound(t *testing.T) {
 		tp, rp := QoSClassPorts(slot)
 		want[tp], want[rp] = false, false
 	}
-	// v6-слой: TCP-инбаунд, общий UDP-инбаунд, по UDP-инбаунду на каждый
-	// возможный мост и IPv6-пары классов QoS.
-	want[Redirect6Port], want[TProxy6Port] = false, false
-	for n := 0; n < maxV6Bridges; n++ {
-		want[TProxy6PortBase+n] = false
-	}
-	for slot := 0; slot < MaxQoSClasses; slot++ {
-		tp, rp := QoSClassPorts6(slot)
-		want[tp], want[rp] = false, false
-	}
 	for _, p := range ports {
 		if _, ok := want[p]; !ok {
 			t.Errorf("лишний порт %d", p)
@@ -33,6 +23,59 @@ func TestRouterListenPortsCoversEveryInbound(t *testing.T) {
 		if !seen {
 			t.Errorf("порт %d не попал в список резервирования", p)
 		}
+	}
+}
+
+// Порты v6-слоя резервируются отдельно и только при включённом перехвате
+// IPv6: в безусловный список они попадать не должны.
+func TestV6ListenPortsCoverEveryInboundAndStayOutOfBootList(t *testing.T) {
+	want := map[int]bool{Redirect6Port: false, TProxy6Port: false}
+	for n := 0; n < maxV6Bridges; n++ {
+		want[TProxy6PortBase+n] = false
+	}
+	for slot := 0; slot < MaxQoSClasses; slot++ {
+		tp, rp := QoSClassPorts6(slot)
+		want[tp], want[rp] = false, false
+	}
+	for _, p := range v6ListenPorts() {
+		if _, ok := want[p]; !ok {
+			t.Errorf("лишний порт %d", p)
+		}
+		want[p] = true
+	}
+	for p, seen := range want {
+		if !seen {
+			t.Errorf("порт %d не попал в список резервирования v6", p)
+		}
+	}
+	boot := map[int]bool{}
+	for _, p := range routerListenPorts() {
+		boot[p] = true
+	}
+	for p := range want {
+		if boot[p] {
+			t.Errorf("порт v6-слоя %d резервируется безусловно", p)
+		}
+	}
+}
+
+func TestReservePortsAtAppendsV6Ports(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ip_local_reserved_ports")
+	if err := os.WriteFile(path, []byte("51271-51272\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := reservePortsAt(path, v6ListenPorts()); err != nil {
+		t.Fatalf("резервирование: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reservedSpecCovers(string(got), v6ListenPorts()) {
+		t.Errorf("порты v6 не покрыты: %q", got)
+	}
+	if !reservedSpecCovers(string(got), []int{51271, 51272}) {
+		t.Errorf("прежний резерв потерян: %q", got)
 	}
 }
 
@@ -92,6 +135,15 @@ func TestReserveListenPortsSkipsWriteWhenCovered(t *testing.T) {
 	}
 	if err := reserveListenPortsAt(path); err != nil {
 		t.Fatalf("повторный вызов не должен ни писать, ни падать: %v", err)
+	}
+	// Под root запрет записи не действует, и проверка выше ничего бы не
+	// поймала — поэтому сверяем и содержимое: файл обязан остаться байт в байт.
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != covered {
+		t.Errorf("покрытый резерв переписан: %q, было %q", got, covered)
 	}
 }
 

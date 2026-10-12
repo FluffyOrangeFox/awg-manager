@@ -169,7 +169,11 @@ func (s *ServiceImpl) runBypassPopulate(tags []string) {
 	// То же для IPv6-набора: пока шло наполнение, перехват IPv6 могли
 	// выключить — слой уже снял правила и снёс набор, а наш swap его воскресил.
 	if v6 && !s.bypassSet6Wanted() {
-		_ = dropBypassSet6(context.Background())
+		if derr := dropBypassSet6(context.Background()); derr != nil {
+			s.appLog.Warn("ipv6", "", "geoip-обход IPv6: снос набора: "+derr.Error())
+		}
+		// Набора быть не должно — и его итог устарел вместе с ним.
+		res.EntryCount6, res.Count6OK, res.Err6 = 0, false, nil
 	}
 	s.storeBypassSetOutcome(res, err)
 }
@@ -201,6 +205,10 @@ func (s *ServiceImpl) storeBypassSetOutcome(res bypassset.PopulateResult, err er
 	s.bypassEntryCount, s.bypassCountOK = res.EntryCount, res.CountOK
 	if !res.CountOK {
 		s.bypassEntryCount = 0
+	} else if res.Count6OK {
+		// Размер в статусе — сумма по обоим наборам; IPv6-половина входит в
+		// неё, только когда её счётчик — факт.
+		s.bypassEntryCount += res.EntryCount6
 	}
 	if err != nil {
 		s.bypassLastError = err.Error()
@@ -208,6 +216,17 @@ func (s *ServiceImpl) storeBypassSetOutcome(res bypassset.PopulateResult, err er
 		s.bypassLastError = ""
 	}
 	s.mu.Unlock()
+
+	// Отказ IPv6-половины в bypassLastError не попадает: IPv4-набор при нём
+	// собран и действует, и статус набора не должен показывать сбой. Причина
+	// уходит отдельным предупреждением — в журнал и в статус роутера.
+	if res.Err6 != nil {
+		msg := res.Err6.Error()
+		s.bypass6Problem.Store(&msg)
+		s.bypassLog.Warn("bypass-set", "", "geoip-обход IPv6: набор не собран (IPv4-набор собран и действует): "+msg)
+	} else {
+		s.bypass6Problem.Store(nil)
+	}
 
 	switch {
 	case err != nil:

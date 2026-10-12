@@ -164,6 +164,9 @@ func (s *ServiceImpl) disablePolicyTun(ctx context.Context, settings *storage.Se
 	// уже не ставил, но живые цепочки с прошлого раза никуда не делись).
 	if s.deps.IPTables != nil {
 		s.deps.IPTables.Uninstall(ctx)
+		// И v6-слой прежнего tproxy-режима: в policy-tun его не ставят, но
+		// сироту после рестарта демона снять больше некому.
+		s.sweepV6(ctx)
 		// Снос ресурса живёт в том же выходе из режима, что и его создание, и
 		// одинаков во всех выходах. Набор AWGM-BYPASS создаёт tproxy-путь, но
 		// выйти из режима можно и здесь, а в policy-tun набор не нужен вовсе

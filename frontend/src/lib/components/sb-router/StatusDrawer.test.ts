@@ -200,3 +200,64 @@ describe('Семейства адресов: отказ бэкенда', () => {
 		await waitFor(() => expect(select.value).toBe('ipv4_only'));
 	});
 });
+
+// Бэкенд отвергает IPv6-подсети в исключениях, пока перехват IPv6 выключен
+// (иначе запись сохранялась бы и молча ничего не делала). Поле ввода не шлёт
+// заведомо отвергаемое и объясняет причину сразу.
+describe('Исключения по подсетям: IPv6 только при перехвате IPv6', () => {
+	beforeEach(() => {
+		patchSpy.mockClear();
+		uiMode.set('expert');
+		openDrawer();
+	});
+
+	async function typeSubnet(value: string) {
+		const input = screen.getByLabelText<HTMLInputElement>('Доп. подсети');
+		await fireEvent.input(input, { target: { value } });
+		await fireEvent.keyDown(input, { key: 'Enter' });
+	}
+
+	it('«Только IPv4»: IPv6-подсеть не принимается, запрос не уходит', async () => {
+		settings.set({ routingMode: 'tproxy', deviceMode: 'policy', policyName: 'p1' });
+		render(StatusDrawer);
+		await typeSubnet('2001:db8::/48');
+		expect(patchSpy).not.toHaveBeenCalled();
+		expect(screen.queryByText(/IPv6-адреса действуют только при включённом перехвате IPv6/)).not.toBeNull();
+	});
+
+	it('«Только IPv4»: IPv4-подсеть принимается как раньше', async () => {
+		settings.set({ routingMode: 'tproxy', deviceMode: 'policy', policyName: 'p1' });
+		render(StatusDrawer);
+		await typeSubnet('10.0.0.0/8');
+		expect(patchSpy).toHaveBeenCalledWith({ bypassExtraSubnets: '10.0.0.0/8' });
+	});
+
+	it('«IPv4 и IPv6»: IPv6-подсеть принимается', async () => {
+		settings.set({ routingMode: 'tproxy', deviceMode: 'policy', policyName: 'p1', interceptFamily: 'both' });
+		render(StatusDrawer);
+		await typeSubnet('2001:db8::/48');
+		expect(patchSpy).toHaveBeenCalledWith({ bypassExtraSubnets: '2001:db8::/48' });
+	});
+
+	it('policy-tun: IPv6-подсеть не принимается даже при сохранённом «IPv4 и IPv6»', async () => {
+		settings.set({ routingMode: 'policy-tun', deviceMode: 'policy', policyName: 'p1', interceptFamily: 'both' });
+		render(StatusDrawer);
+		await typeSubnet('2001:db8::/48');
+		expect(patchSpy).not.toHaveBeenCalled();
+	});
+
+	it('оставшаяся IPv6-подсеть при выключенном перехвате видна и помечена недействующей', () => {
+		settings.set({
+			routingMode: 'tproxy',
+			deviceMode: 'policy',
+			policyName: 'p1',
+			bypassExtraSubnets: '10.0.0.0/8, 2001:db8::/48',
+		});
+		render(StatusDrawer);
+		const inert = screen.getByText('2001:db8::/48', { exact: false }).closest('.port-chip');
+		expect(inert?.classList.contains('inert')).toBe(true);
+		expect(inert?.getAttribute('title')).toBe('Не действует: перехват IPv6 выключен');
+		const live = screen.getByText('10.0.0.0/8', { exact: false }).closest('.port-chip');
+		expect(live?.classList.contains('inert')).toBe(false);
+	});
+});

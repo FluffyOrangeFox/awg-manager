@@ -62,6 +62,21 @@ func (s *ServiceImpl) UpdateSettings(ctx context.Context, sr storage.SingboxRout
 			return ErrIP6TablesMissing
 		}
 	}
+	// IPv6-подсети в исключениях принимаются, только пока v6-слой работает:
+	// иначе запись сохранилась бы и молча ничего не делала. Проверка здесь, а
+	// не в чистом Normalize: тот зовётся и на чтении, а режим этим PUT не
+	// меняется — судить надо по сохранённому.
+	if len(normalized.BypassExtraSubnets) > 0 {
+		cur, err := s.deps.Settings.Get()
+		if err != nil {
+			return err
+		}
+		next := normalized
+		next.RoutingMode = cur.SingboxRouter.RoutingMode
+		if err := checkV6SubnetsAccepted(next, cur.SingboxRouter); err != nil {
+			return err
+		}
+	}
 	// Персист-окно под transitionMu: см. ErrTransitionInProgress. Reconcile
 	// ниже остаётся ВНЕ окна — он сам берёт transitionMu через TryLock и под
 	// нашим локом молча съел бы тик (мьютекс нерекурсивный).

@@ -1668,6 +1668,12 @@ func (s *ServiceImpl) GetStatus(ctx context.Context) (Status, error) {
 	if issue, ok := s.v6Issue(sr); ok {
 		issues = append(issues, issue)
 	}
+	if issue, ok := s.bypass6Issue(sr); ok {
+		issues = append(issues, issue)
+	}
+	if issue, ok := inertV6SubnetsIssue(sr); ok {
+		issues = append(issues, issue)
+	}
 	// fakeip-tun active iface: surface the provisioned kernel iface name
 	// ("opkgtun<idx>") so the UI can show it in the engine-settings panel. Only
 	// when in fakeip-tun mode AND actually provisioned (persisted FakeIPState);
@@ -1828,18 +1834,10 @@ func (s *ServiceImpl) Disable(ctx context.Context) error {
 	}
 
 	s.deps.IPTables.Uninstall(ctx)
-	// v6-слой сносится вместе с v4 и безусловно по настройке: живёт он только
-	// внутри режима tproxy. Сам решает, есть ли что сносить.
-	s.teardownV6(ctx, "")
-	s.v6Clear()
-	// Набор AWGM-BYPASS6 сносим безусловно, как и IPv4-набор ниже: общий
-	// проход наполнения создаёт его и тогда, когда правила слоя так и не
-	// встали (на LAN нет IPv6), и teardownV6 такого сироту не видит.
-	if s.deps.IPTables.hasV6() {
-		if err := dropBypassSet6(ctx); err != nil {
-			s.appLog.Warn("ipv6", "", "geoip-обход IPv6: снос набора: "+err.Error())
-		}
-	}
+	// v6-слой сносится вместе с v4 и так же безусловно, включая набор
+	// AWGM-BYPASS6: общий проход наполнения создаёт его и тогда, когда правила
+	// слоя так и не встали (на LAN нет IPv6).
+	s.sweepV6(ctx)
 	// Только ПОСЛЕ Uninstall: пока правило `--match-set` в ядре, ipset
 	// откажется сносить набор («set is in use»). Безусловно, а не по
 	// currentBypassGeoIPTags: после рестарта демона поле пустое, а набор и

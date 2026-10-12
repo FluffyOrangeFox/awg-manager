@@ -102,6 +102,8 @@ func newStubIPTables(restoreRecorder func(context.Context, string) error) *IPTab
 		persistBlackhole:        func(string) error { return nil },
 		cleanupBlackhole:        func() {},
 		runCtClean:              func(context.Context) {},
+
+		v6: nopV6{},
 	}
 }
 
@@ -882,6 +884,7 @@ func TestReconcile_JumpsMissing_Reinstalls(t *testing.T) {
 	stubNoLANBridges(t)
 	restoreCalls := 0
 	ipt := &IPTables{
+		v6:             nopV6{},
 		restoreNoflush: func(_ context.Context, _ string) error { restoreCalls++; return nil },
 		runIPTables:    func(_ context.Context, _ ...string) error { return nil },
 		// Chains declared but PREROUTING has no `-j AWGM-*` jump → jumps wiped.
@@ -933,6 +936,7 @@ func TestReconcile_ProbeError_NoReinstall(t *testing.T) {
 	stubNoLANBridges(t)
 	restoreCalls := 0
 	ipt := &IPTables{
+		v6:             nopV6{},
 		restoreNoflush: func(_ context.Context, _ string) error { restoreCalls++; return nil },
 		runIPTables:    func(_ context.Context, _ ...string) error { return nil },
 		runIPTablesOut: func(_ context.Context, _ ...string) (string, error) {
@@ -1053,6 +1057,7 @@ func TestReconcile_DisabledPartialInstall_CleansUp(t *testing.T) {
 	// (остатки есть) при installed=false (целостности нет).
 	uninstallCalled := false
 	ipt := &IPTables{
+		v6:          nopV6{},
 		runIPTables: func(_ context.Context, _ ...string) error { return nil },
 		runIPTablesOut: func(_ context.Context, args ...string) (string, error) {
 			if len(args) >= 2 && args[0] == "-t" && args[1] == "mangle" {
