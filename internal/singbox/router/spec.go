@@ -57,6 +57,7 @@ func (s *ServiceImpl) buildTproxySpec(
 		BypassGeoIPSet:    len(sr.BypassGeoIPTags) > 0,
 		IngressInterfaces: ingress,
 		QoSClasses:        qosSpecs,
+		V4Off:             !familyHasV4(sr.InterceptFamily),
 	}
 }
 

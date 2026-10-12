@@ -179,9 +179,12 @@ func TestResolveBypassSubnets(t *testing.T) {
 		{"mixed comma+space", "203.0.113.0/24, 10.8.0.5", []string{"203.0.113.0/24", "10.8.0.5/32"}, false},
 		{"hostname rejected", "vpn.example.com", nil, true},
 		{"garbage rejected", "not-an-ip", nil, true},
-		{"ipv6 cidr rejected", "::1/128", nil, true},
-		{"ipv6 bare rejected", "fe80::1", nil, true},
+		// IPv6 допустим, но в IPv4-часть не попадает (см. TestSplitBypassSubnets).
+		{"ipv6 cidr accepted, not in v4", "2001:db8::/32", nil, false},
+		{"ipv6 bare accepted, not in v4", "2001:db8::1", nil, false},
+		{"mixed families keep v4 only", "10.8.0.5, 2001:db8::/32", []string{"10.8.0.5/32"}, false},
 		{"bad prefix rejected", "10.0.0.0/99", nil, true},
+		{"zoned ipv6 rejected", "fe80::1%br0", nil, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -193,6 +196,29 @@ func TestResolveBypassSubnets(t *testing.T) {
 				t.Fatalf("got %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// Один пользовательский список делится по семействам: IPv4 уходит в правила
+// iptables, IPv6 — в правила v6-слоя. Голый адрес получает полную маску своего
+// семейства, CIDR канонизируется.
+func TestSplitBypassSubnets(t *testing.T) {
+	v4, v6, err := splitBypassSubnets("203.0.113.7/24, 2001:db8:1::5/48 10.8.0.5,2001:db8::1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := []string{"203.0.113.0/24", "10.8.0.5/32"}; !slices.Equal(v4, want) {
+		t.Errorf("v4 = %v, want %v", v4, want)
+	}
+	if want := []string{"2001:db8:1::/48", "2001:db8::1/128"}; !slices.Equal(v6, want) {
+		t.Errorf("v6 = %v, want %v", v6, want)
+	}
+	got6, err := resolveBypassSubnets6("10.8.0.5, 2001:db8::1")
+	if err != nil || !slices.Equal(got6, []string{"2001:db8::1/128"}) {
+		t.Errorf("resolveBypassSubnets6 = %v, %v", got6, err)
+	}
+	if _, _, err := splitBypassSubnets("2001:db8::/200"); err == nil {
+		t.Error("неверная маска IPv6 обязана быть отвергнута")
 	}
 }
 

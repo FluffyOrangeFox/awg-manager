@@ -468,6 +468,9 @@ func (a keenDNSInfoAdapter) KeenDNSInfo(ctx context.Context) (string, []string, 
 			if ip := net.ParseIP(info.Address); ip != nil && ip.To4() != nil {
 				addrs = append(addrs, ip.String())
 			}
+			if ip := net.ParseIP(info.Address6); ip != nil && ip.To4() == nil {
+				addrs = append(addrs, ip.String())
+			}
 		}
 	}
 	if a.dnsProxy != nil {
@@ -481,6 +484,10 @@ func (a keenDNSInfoAdapter) KeenDNSInfo(ctx context.Context) (string, []string, 
 		}
 		static := diagnostics.StaticIPv4InZones(proxies,
 			dnsrewrite.KeenDNSHosts(), dnsrewrite.KeenDNSZones())
+		// IPv6-адреса тех же имён — для правил перехвата IPv6. Семейства идут
+		// одним списком; router раскладывает их сам (setKeenDNSBypass).
+		static = append(static, diagnostics.StaticIPv6InZones(proxies,
+			dnsrewrite.KeenDNSHosts(), dnsrewrite.KeenDNSZones())...)
 		for _, ip := range static {
 			if !slices.Contains(addrs, ip) {
 				addrs = append(addrs, ip)

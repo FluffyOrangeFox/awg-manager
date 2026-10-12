@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"net/netip"
 	"slices"
 	"time"
 
@@ -18,8 +19,9 @@ const keenDNSQueryTimeout = 5 * time.Second
 const keenDNSInfoTTL = 5 * time.Minute
 
 // KeenDNSInfoProvider отдаёт данные пресета keendns с самого роутера: FQDN,
-// который роутеру выдал KeenDNS, и IPv4, к которым роутер направляет свои
-// KeenDNS-имена (статические записи ndnproxy + адрес доступа в режиме direct).
+// который роутеру выдал KeenDNS, и адреса (IPv4 и IPv6), к которым роутер
+// направляет свои KeenDNS-имена (статические записи ndnproxy + адрес доступа в
+// режиме direct).
 // Пустые значения = KeenDNS не настроен.
 type KeenDNSInfoProvider interface {
 	KeenDNSInfo(ctx context.Context) (fqdn string, addrs []string, err error)
@@ -146,15 +148,32 @@ func (s *ServiceImpl) keenDNSInfo(ctx context.Context, prov KeenDNSInfoProvider)
 }
 
 // setKeenDNSBypass запоминает адреса, которые должны обходить sing-box, в
-// форме CIDR для iptables. Пустой список = обхода нет.
+// форме CIDR для iptables и ip6tables. Пустой список = обхода нет. Семейство
+// определяется по самому адресу: провайдер отдаёт оба в одном списке.
 func (s *ServiceImpl) setKeenDNSBypass(ips []string) {
-	var cidrs []string
+	var cidrs, cidrs6 []string
 	for _, ip := range ips {
-		cidrs = append(cidrs, ip+"/32")
+		addr, err := netip.ParseAddr(ip)
+		switch {
+		case err != nil:
+			continue
+		case addr.Is4() || addr.Is4In6():
+			cidrs = append(cidrs, addr.Unmap().String()+"/32")
+		default:
+			cidrs6 = append(cidrs6, addr.String()+"/128")
+		}
 	}
 	s.keenDNSMu.Lock()
 	s.keenDNSBypassCIDRs = cidrs
+	s.keenDNSBypassCIDRs6 = cidrs6
 	s.keenDNSMu.Unlock()
+}
+
+// keenDNSBypass6 отдаёт IPv6-часть обхода пресета keendns для V6Spec.
+func (s *ServiceImpl) keenDNSBypass6() []string {
+	s.keenDNSMu.Lock()
+	defer s.keenDNSMu.Unlock()
+	return slices.Clone(s.keenDNSBypassCIDRs6)
 }
 
 // keenDNSBypass отдаёт текущие CIDR обхода пресета keendns для RestoreInputSpec.

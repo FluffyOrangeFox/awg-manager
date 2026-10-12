@@ -14,8 +14,13 @@ import (
 )
 
 const (
-	Binary          = "/opt/sbin/iptables"
-	RestoreBinary   = "/opt/sbin/iptables-restore"
+	Binary        = "/opt/sbin/iptables"
+	RestoreBinary = "/opt/sbin/iptables-restore"
+	// Binary6 / RestoreBinary6 — те же утилиты для IPv6. Entware ставит их
+	// отдельным пакетом ip6tables, поэтому наличие v4-бинаря их не гарантирует:
+	// вызывающий обязан проверить Available6.
+	Binary6         = "/opt/sbin/ip6tables"
+	RestoreBinary6  = "/opt/sbin/ip6tables-restore"
 	MaxRestoreTries = 3
 	RetryBaseWait   = time.Second
 )
@@ -25,6 +30,15 @@ const (
 // отсутствующего модуля или отвергнутой ядром спеки — тот же довод, что уже
 // записан у RestoreNoflush ниже.
 func Run(ctx context.Context, args ...string) error {
+	return run(ctx, Binary, args...)
+}
+
+// Run6 — Run для ip6tables.
+func Run6(ctx context.Context, args ...string) error {
+	return run(ctx, Binary6, args...)
+}
+
+func run(ctx context.Context, binary string, args ...string) error {
 	comment := usesCommentMatch(args)
 	if comment {
 		ensureCommentModuleFn(ctx)
@@ -36,7 +50,7 @@ func Run(ctx context.Context, args ...string) error {
 		if attempt > 0 {
 			time.Sleep(time.Duration(attempt) * RetryBaseWait)
 		}
-		res, err = exec.Run(ctx, Binary, full...)
+		res, err = exec.Run(ctx, binary, full...)
 		if err == nil {
 			return nil
 		}
@@ -137,8 +151,17 @@ func moduleLoaded(name string) bool {
 // (e.g. `-S PREROUTING`) where the caller needs to inspect the rule listing,
 // not just the exit code.
 func RunOutput(ctx context.Context, args ...string) (string, error) {
+	return runOutput(ctx, Binary, args...)
+}
+
+// RunOutput6 — RunOutput для ip6tables.
+func RunOutput6(ctx context.Context, args ...string) (string, error) {
+	return runOutput(ctx, Binary6, args...)
+}
+
+func runOutput(ctx context.Context, binary string, args ...string) (string, error) {
 	full := append([]string{"-w"}, args...)
-	res, err := exec.Run(ctx, Binary, full...)
+	res, err := exec.Run(ctx, binary, full...)
 	if res == nil {
 		return "", err
 	}
@@ -149,13 +172,32 @@ func RunOutput(ctx context.Context, args ...string) (string, error) {
 }
 
 func RestoreNoflush(ctx context.Context, input string) error {
+	return restoreNoflush(ctx, RestoreBinary, "iptables-restore", input)
+}
+
+// RestoreNoflush6 — RestoreNoflush для ip6tables-restore.
+func RestoreNoflush6(ctx context.Context, input string) error {
+	return restoreNoflush(ctx, RestoreBinary6, "ip6tables-restore", input)
+}
+
+// Available6 сообщает, установлены ли ip6tables и ip6tables-restore.
+func Available6() bool {
+	for _, p := range []string{Binary6, RestoreBinary6} {
+		if _, err := os.Stat(p); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func restoreNoflush(ctx context.Context, binary, name, input string) error {
 	var lastErr error
 	var lastResult *exec.Result
 	for attempt := 0; attempt < MaxRestoreTries; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Duration(attempt) * RetryBaseWait)
 		}
-		result, err := exec.RunWithOptions(ctx, RestoreBinary, []string{"--noflush"}, exec.Options{
+		result, err := exec.RunWithOptions(ctx, binary, []string{"--noflush"}, exec.Options{
 			Stdin: strings.NewReader(input),
 		})
 		if err == nil {
@@ -168,5 +210,5 @@ func RestoreNoflush(ctx context.Context, input string) error {
 	// caller's log entry actually tells us where the kernel rejected the
 	// batch. Without FormatError, we get only "exit status 1" which is
 	// useless for diagnosing parse vs. commit failures.
-	return fmt.Errorf("iptables-restore --noflush: %w", exec.FormatError(lastResult, lastErr))
+	return fmt.Errorf("%s --noflush: %w", name, exec.FormatError(lastResult, lastErr))
 }

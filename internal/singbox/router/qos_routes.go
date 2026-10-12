@@ -98,6 +98,10 @@ func buildQoSRouteRules(classes []qosClass, sr storage.SingboxRouterSettings) []
 	for _, q := range classes {
 		udpInbounds = append(udpInbounds, qosTProxyTag(q.DSCP))
 		allInbounds = append(allInbounds, qosTProxyTag(q.DSCP), qosRedirectTag(q.DSCP))
+		if q.V6 {
+			udpInbounds = append(udpInbounds, qosTProxy6Tag(q.DSCP))
+			allInbounds = append(allInbounds, qosTProxy6Tag(q.DSCP), qosRedirect6Tag(q.DSCP))
+		}
 	}
 	out := make([]Rule, 0, len(classes)+2)
 	if sr.SnifferEnabled {
@@ -110,8 +114,12 @@ func buildQoSRouteRules(classes []qosClass, sr storage.SingboxRouterSettings) []
 		UDPTimeout: resolveUDPTimeout(sr.UDPTimeout),
 	})
 	for _, q := range classes {
+		inbounds := []string{qosTProxyTag(q.DSCP), qosRedirectTag(q.DSCP)}
+		if q.V6 {
+			inbounds = append(inbounds, qosTProxy6Tag(q.DSCP), qosRedirect6Tag(q.DSCP))
+		}
 		out = append(out, Rule{
-			Inbound:  []string{qosTProxyTag(q.DSCP), qosRedirectTag(q.DSCP)},
+			Inbound:  inbounds,
 			Action:   "route",
 			Outbound: q.Outbound,
 		})
@@ -337,7 +345,7 @@ func (s *ServiceImpl) disableQoSClassesForOutbound(tag string) error {
 // edits, bypassing the «Применить» gate. persistConfigDirect's byte-equal
 // short-circuit keeps the steady state write-free.
 func (s *ServiceImpl) healQoSConfig(ctx context.Context, sr storage.SingboxRouterSettings) (bool, error) {
-	classes := activeQoSClasses(sr.QoSClasses)
+	classes := qosClassesFor(sr)
 	cfg, err := s.loadAppliedRouterConfig()
 	if err != nil {
 		return false, err

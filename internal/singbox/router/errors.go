@@ -73,6 +73,10 @@ var (
 	// 400 with the detailed Russian message intact.
 	ErrQoSClassesInvalid = errors.New("некорректные классы QoS")
 
+	// ErrIP6TablesMissing: в настройках выбран перехват IPv6, а ip6tables на
+	// роутере нет (в Entware это отдельный пакет). Mapped to 400 by the API.
+	ErrIP6TablesMissing = errors.New("для перехвата IPv6 нужен пакет ip6tables: opkg install ip6tables")
+
 	// ErrTransitionInProgress: PUT настроек лёг в окно живого SwitchRoutingMode.
 	// Save отсюда откатил бы persistMode(target), и Enable перехода поднялся бы
 	// по чужому режиму. Не ждём (переход держит transitionMu минуты) — честно

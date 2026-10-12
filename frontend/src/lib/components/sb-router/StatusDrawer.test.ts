@@ -154,3 +154,49 @@ describe('Анализ трафика: потолок UDP-NAT', () => {
 		expect(patchSpy).toHaveBeenCalledWith({ udpNatMax: undefined });
 	});
 });
+
+describe('Семейства адресов (перехват IPv6)', () => {
+	beforeEach(() => {
+		patchSpy.mockClear();
+		uiMode.set('expert');
+		openDrawer();
+	});
+
+	it('TPROXY: без поля в настройках выбрано «Только IPv4», смена уходит через applyPatch', async () => {
+		settings.set({ routingMode: 'tproxy', deviceMode: 'policy', policyName: 'p1' });
+		render(StatusDrawer);
+		const select = screen.getByLabelText<HTMLSelectElement>('Перехватывать');
+		expect(select.value).toBe('ipv4_only');
+		await fireEvent.change(select, { target: { value: 'both' } });
+		expect(patchSpy).toHaveBeenCalledWith({ interceptFamily: 'both' });
+	});
+
+	it('TPROXY: показывает сохранённое значение', () => {
+		settings.set({ routingMode: 'tproxy', deviceMode: 'policy', policyName: 'p1', interceptFamily: 'ipv6_only' });
+		render(StatusDrawer);
+		expect(screen.getByLabelText<HTMLSelectElement>('Перехватывать').value).toBe('ipv6_only');
+	});
+
+	it('policy-tun: выбора нет — семейства задаёт адресация tun', () => {
+		settings.set({ routingMode: 'policy-tun', deviceMode: 'policy', policyName: 'p1' });
+		render(StatusDrawer);
+		expect(screen.queryByLabelText('Перехватывать')).toBeNull();
+	});
+});
+
+describe('Семейства адресов: отказ бэкенда', () => {
+	beforeEach(() => {
+		patchSpy.mockClear();
+		uiMode.set('expert');
+		settings.set({ routingMode: 'tproxy', deviceMode: 'policy', policyName: 'p1' });
+		openDrawer();
+	});
+
+	it('без пакета ip6tables выбор возвращается к сохранённому', async () => {
+		patchSpy.mockRejectedValueOnce(new Error('для перехвата IPv6 нужен пакет ip6tables'));
+		render(StatusDrawer);
+		const select = screen.getByLabelText<HTMLSelectElement>('Перехватывать');
+		await fireEvent.change(select, { target: { value: 'both' } });
+		await waitFor(() => expect(select.value).toBe('ipv4_only'));
+	});
+});

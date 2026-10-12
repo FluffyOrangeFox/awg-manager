@@ -118,35 +118,54 @@ func resolveBypassCIDRs(presets []string, extra string, adhoc []string) ([]strin
 	return out, nil
 }
 
-// resolveBypassSubnets парсит список IPv4 IP/CIDR (через запятую/пробел) в
-// канонизированные CIDR. Голый IP → "/32". Hostname, IPv6 и мусор отвергаются —
-// иначе невалидный "-d" уронит весь iptables-restore COMMIT. Пустая строка →
-// (nil, nil).
+// resolveBypassSubnets парсит список IP/CIDR (через запятую/пробел) и отдаёт
+// его IPv4-часть канонизированными CIDR. Голый IP → "/32". Hostname и мусор
+// отвергаются — иначе невалидный "-d" уронит весь iptables-restore COMMIT.
+// IPv6-записи допустимы, но сюда не попадают: их отдаёт resolveBypassSubnets6
+// (правила v6-слоя, iptables6.go). Пустая строка → (nil, nil).
 func resolveBypassSubnets(extra string) ([]string, error) {
+	v4, _, err := splitBypassSubnets(extra)
+	return v4, err
+}
+
+// resolveBypassSubnets6 — IPv6-часть того же списка. Голый адрес → "/128".
+func resolveBypassSubnets6(extra string) ([]string, error) {
+	_, v6, err := splitBypassSubnets(extra)
+	return v6, err
+}
+
+// splitBypassSubnets разбирает пользовательский список исключений и делит его
+// по семействам. Список один на оба семейства намеренно: пользователь задаёт
+// «куда ходить мимо sing-box», а в какую таблицу это ляжет — наша забота.
+func splitBypassSubnets(extra string) (v4, v6 []string, err error) {
 	extra = strings.TrimSpace(extra)
 	if extra == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
-	var out []string
 	for _, field := range strings.FieldsFunc(extra, func(r rune) bool { return r == ',' || r == ' ' }) {
 		s := strings.TrimSpace(field)
 		if s == "" {
 			continue
 		}
-		if _, ipnet, err := net.ParseCIDR(s); err == nil {
+		if _, ipnet, perr := net.ParseCIDR(s); perr == nil {
 			if ipnet.IP.To4() == nil {
-				return nil, fmt.Errorf("IPv6 не поддерживается: %q", s)
+				v6 = append(v6, ipnet.String())
+			} else {
+				v4 = append(v4, ipnet.String())
 			}
-			out = append(out, ipnet.String())
 			continue
 		}
-		if ip := net.ParseIP(s); ip != nil && ip.To4() != nil {
-			out = append(out, ip.String()+"/32")
+		if ip := net.ParseIP(s); ip != nil {
+			if ip.To4() == nil {
+				v6 = append(v6, ip.String()+"/128")
+			} else {
+				v4 = append(v4, ip.String()+"/32")
+			}
 			continue
 		}
-		return nil, fmt.Errorf("неверный IP/CIDR: %q", s)
+		return nil, nil, fmt.Errorf("неверный IP/CIDR: %q", s)
 	}
-	return out, nil
+	return v4, v6, nil
 }
 
 // parseExtraPorts parses a comma-separated list of port entries in the format

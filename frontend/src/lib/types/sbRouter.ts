@@ -15,6 +15,13 @@ export interface SingboxRouterSettings {
 	policyName: string;
 	deviceMode?: 'policy' | 'all';
 	/**
+	 * Какие семейства адресов перехватывает режим TPROXY. Отсутствует на старых
+	 * payload'ах → 'ipv4_only' (историческое поведение). 'both' и 'ipv6_only'
+	 * требуют пакета ip6tables на роутере — иначе бэкенд отвечает 400
+	 * IP6TABLES_MISSING. В tun-режимах не участвует.
+	 */
+	interceptFamily?: 'ipv4_only' | 'both' | 'ipv6_only';
+	/**
 	 * Active routing mode. Source of truth for the FakeIP page's engine-state
 	 * derivation. Served by GET /singbox/router/settings (omitempty; absent on
 	 * legacy payloads → treat as 'tproxy'). NOT on the status endpoint.

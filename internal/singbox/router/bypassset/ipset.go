@@ -139,11 +139,16 @@ func EntryCount(ctx context.Context) int {
 // подсчётом `add`-строк из `ipset save` (дороже — дампит набор, но статус
 // запрашивают редко, не в горячем пути).
 func EntryCountChecked(ctx context.Context) (n int, ok bool) {
+	return entryCountCheckedOf(ctx, SetName)
+}
+
+// entryCountCheckedOf — EntryCountChecked для произвольного набора.
+func entryCountCheckedOf(ctx context.Context, name string) (n int, ok bool) {
 	bin, err := ipsetBin()
 	if err != nil {
 		return 0, false
 	}
-	res, err := runIpsetCtl(ctx, bin, "list", SetName, "-t")
+	res, err := runIpsetCtl(ctx, bin, "list", name, "-t")
 	if err != nil || res == nil {
 		return 0, false // ошибка команды / несуществующий набор
 	}
@@ -160,13 +165,13 @@ func EntryCountChecked(ctx context.Context) (n int, ok bool) {
 	}
 	// Набор существует (list -t не ошибся), но поле счётчика отсутствует —
 	// protocol 6. Считаем члены через save.
-	return countViaSave(ctx, bin)
+	return countViaSave(ctx, bin, name)
 }
 
 // countViaSave считает записи набора как число `add`-строк в `ipset save`.
 // Fallback для kernel protocol 6, где `list -t` не печатает счётчик.
-func countViaSave(ctx context.Context, bin string) (n int, ok bool) {
-	res, err := runIpsetCtl(ctx, bin, "save", SetName)
+func countViaSave(ctx context.Context, bin, name string) (n int, ok bool) {
+	res, err := runIpsetCtl(ctx, bin, "save", name)
 	if err != nil || res == nil {
 		return 0, false
 	}

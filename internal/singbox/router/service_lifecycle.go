@@ -850,6 +850,12 @@ func (s *ServiceImpl) enableLocked(ctx context.Context, clearManualStop bool) er
 		return err
 	}
 	cfg.Inbounds = ensureTProxyInbound(cfg.Inbounds, sr.UDPTimeout, sr.UDPNATMax)
+	// Инбаунды v6-слоя — из того же снимка настроек, что и его правила ниже
+	// (syncV6), чтобы порты и мосты не могли разойтись.
+	v6Want, v6Mode := s.desiredV6(ctx, sr, mark, policyMode)
+	if v6Mode != v6Unknown {
+		cfg.Inbounds, _ = ensureV6Inbounds(cfg.Inbounds, v6Want, v6Mode == v6On, sr.UDPTimeout, sr.UDPNATMax)
+	}
 	cfg.Outbounds = stripAutoManagedDirect(cfg.Outbounds, s.foreignIfaces())
 	cfg.EnsureSystemRules(sr.SnifferEnabled)
 	// Neutralize sing-box's short per-protocol UDP timeouts (QUIC/DTLS 30s,
@@ -863,7 +869,7 @@ func (s *ServiceImpl) enableLocked(ctx context.Context, clearManualStop bool) er
 	// cannot drift between the two. The managed route rules live in their
 	// own slot (18-qos-routes.json) and are synced after the config write
 	// below — see qos_routes.go for why they must not live in 20-router.json.
-	qosClasses := activeQoSClasses(sr.QoSClasses)
+	qosClasses := qosClassesFor(sr)
 	cfg.Inbounds, _ = ensureQoSInbounds(cfg.Inbounds, qosClasses, sr.UDPTimeout, sr.UDPNATMax)
 	// Settings was already loaded above; revalidate here in case the
 	// store is corrupted or hand-edited around a schema migration. We
@@ -946,15 +952,19 @@ func (s *ServiceImpl) enableLocked(ctx context.Context, clearManualStop bool) er
 	// the same policy). EnsureXtDscpModule first: prepareNetfilter already
 	// tried, this is the belt-and-suspenders retry closest to Install.
 	qosSpecs := qosIPTablesSpecs(qosClasses)
+	qosSpecs6 := qosIPTablesSpecs6(qosClasses)
 	if len(qosSpecs) > 0 {
 		if err := EnsureXtDscpModule(ctx); err != nil {
 			s.appLog.Warn("ensure-xt-dscp", "", err.Error())
 		}
 		if !s.xtDscpUsable(ctx) {
 			s.appLog.Warn("qos-dscp", "", "xt_dscp недоступен — классы QoS пропущены (см. статус xtDscpAvailable)")
-			qosSpecs = nil
+			qosSpecs, qosSpecs6 = nil, nil
 		}
 	}
+	// Классы QoS для IPv6 — та же проекция и тот же гейт xt_dscp: модуль общий
+	// для обоих семейств.
+	v6Want.QoSClasses = qosSpecs6
 
 	// Набор geoip-обхода должен существовать ДО установки правил: правило
 	// `-m set --match-set AWGM-BYPASS` на отсутствующий набор роняет весь
@@ -997,6 +1007,11 @@ func (s *ServiceImpl) enableLocked(ctx context.Context, clearManualStop bool) er
 	// Правила переустановлены и на AWGM-SELECTIVE больше не ссылаются —
 	// теперь набор выпиленного селектива можно снести (однократно).
 	s.destroyLegacySelectiveSetOnce(ctx)
+
+	// v6-слой — после v4 и без права уронить Enable: IPv4-перехват уже поднят.
+	// Конфиг с его инбаундами записан и применён выше, поэтому ждём сокеты как
+	// после правки (inboundsHealed).
+	s.syncV6(ctx, v6Want, v6Mode, false, true, true)
 
 	if err := s.deps.Settings.Update(func(cur *storage.Settings) error {
 		cur.SingboxRouter = sr
@@ -1649,6 +1664,10 @@ func (s *ServiceImpl) GetStatus(ctx context.Context) (Status, error) {
 		}
 		issues = append(issues, Issue{Severity: "warning", Kind: "qos-xt-dscp", Message: msg})
 	}
+	// Перехват IPv6 выбран, но правила не стоят — причина из последней сверки.
+	if issue, ok := s.v6Issue(sr); ok {
+		issues = append(issues, issue)
+	}
 	// fakeip-tun active iface: surface the provisioned kernel iface name
 	// ("opkgtun<idx>") so the UI can show it in the engine-settings panel. Only
 	// when in fakeip-tun mode AND actually provisioned (persisted FakeIPState);
@@ -1809,6 +1828,18 @@ func (s *ServiceImpl) Disable(ctx context.Context) error {
 	}
 
 	s.deps.IPTables.Uninstall(ctx)
+	// v6-слой сносится вместе с v4 и безусловно по настройке: живёт он только
+	// внутри режима tproxy. Сам решает, есть ли что сносить.
+	s.teardownV6(ctx, "")
+	s.v6Clear()
+	// Набор AWGM-BYPASS6 сносим безусловно, как и IPv4-набор ниже: общий
+	// проход наполнения создаёт его и тогда, когда правила слоя так и не
+	// встали (на LAN нет IPv6), и teardownV6 такого сироту не видит.
+	if s.deps.IPTables.hasV6() {
+		if err := dropBypassSet6(ctx); err != nil {
+			s.appLog.Warn("ipv6", "", "geoip-обход IPv6: снос набора: "+err.Error())
+		}
+	}
 	// Только ПОСЛЕ Uninstall: пока правило `--match-set` в ядре, ipset
 	// откажется сносить набор («set is in use»). Безусловно, а не по
 	// currentBypassGeoIPTags: после рестарта демона поле пустое, а набор и
@@ -2071,14 +2102,15 @@ func (s *ServiceImpl) reconcileInstalled(ctx context.Context, sr storage.Singbox
 	// later would leave desired≠installed forever and re-Install on every
 	// tick. When the module/extension shows up, the (TTL-bounded) probe
 	// flips and qosChanged triggers one re-Install with rules.
-	qosClasses := activeQoSClasses(sr.QoSClasses)
+	qosClasses := qosClassesFor(sr)
 	qosSpecs := qosIPTablesSpecs(qosClasses)
+	qosSpecs6 := qosIPTablesSpecs6(qosClasses)
 	if len(qosSpecs) > 0 {
 		if err := EnsureXtDscpModule(ctx); err != nil {
 			s.appLog.Warn("ensure-xt-dscp", "", err.Error())
 		}
 		if !s.xtDscpUsable(ctx) {
-			qosSpecs = nil
+			qosSpecs, qosSpecs6 = nil, nil
 		}
 	}
 	// Применённые классы читаются прямо из снимка, как и соседние три входа
@@ -2104,6 +2136,14 @@ func (s *ServiceImpl) reconcileInstalled(ctx context.Context, sr storage.Singbox
 	// idempotently so sing-box keeps listening on TPROXYPort.
 	if err := s.healTProxyInbound(ctx, sr.UDPTimeout, sr.UDPNATMax); err != nil {
 		s.appLog.Warn("heal-tproxy", "", err.Error())
+	}
+	// Инбаунды v6-слоя — тем же порядком: сначала конфиг, правила в самом
+	// конце (syncV6), когда sing-box уже слушает.
+	v6Want, v6Mode := s.desiredV6(ctx, sr, mark, policyMode)
+	v6Want.QoSClasses = qosSpecs6
+	v6Healed, err := s.healV6Inbounds(ctx, sr, v6Want, v6Mode)
+	if err != nil {
+		s.appLog.Warn("heal-ipv6", "", err.Error())
 	}
 	// healQoSConfig: per-class inbound pairs (20-router.json) + managed route
 	// rules (18-qos-routes.json). Converges class add/remove/disable and
@@ -2159,7 +2199,9 @@ func (s *ServiceImpl) reconcileInstalled(ctx context.Context, sr storage.Singbox
 	// явный fail-closed blackhole — DROP policy-трафика (с теми же RETURN-
 	// исключениями LAN/router/WAN, что и у перехвата), чтобы гарантированно НЕ
 	// течь в WAN, пока движок не вернётся. Снимается ниже, когда движок оживёт.
-	wantBlackhole := jumpsMissing && engineDown
+	// При V4Off (ipv6_only) блокировку не ставим: IPv4 не перехватывается, и
+	// DROP уронил бы трафик, который должен идти мимо sing-box.
+	wantBlackhole := jumpsMissing && engineDown && !want.V4Off
 	if wantBlackhole {
 		// Спек блокировки — ТОТ ЖЕ спек перехвата, а не выборка полей из него.
 		// Так блокировка дропает ровно то, что уехало бы в sing-box (включая
@@ -2295,6 +2337,9 @@ func (s *ServiceImpl) reconcileInstalled(ctx context.Context, sr storage.Singbox
 			s.mu.Unlock()
 		}
 	}
+
+	// v6-слой — последним: его отказ не должен мешать ничему выше.
+	s.syncV6(ctx, v6Want, v6Mode, engineDown, forceInitialSync, v6Healed)
 
 	return nil
 }

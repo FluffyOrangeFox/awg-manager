@@ -1090,6 +1090,52 @@ func TestRouterPutSettings_ExplicitEmptyPool6Passes(t *testing.T) {
 	}
 }
 
+// Тот же узор для interceptFamily: клиент, не знающий поля (старый фронтенд,
+// скрипт), не должен своим PUT молча выключать перехват IPv6.
+func TestRouterPutSettings_OmittedInterceptFamilyKeepsStored(t *testing.T) {
+	svc := &mockRouterSvc{settings: storage.SingboxRouterSettings{InterceptFamily: "both"}}
+	h := newMockRouterHandler(svc)
+	req := httptest.NewRequest(http.MethodPut, "/api/singbox/router/settings",
+		strings.NewReader(`{"enabled":true,"wanAutoDetect":true,"policyName":"awgm-router"}`))
+	rr := httptest.NewRecorder()
+	h.PutSettings(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+	if svc.settings.InterceptFamily != "both" {
+		t.Errorf("interceptFamily = %q, want сохранённое \"both\" (absent ≠ empty)", svc.settings.InterceptFamily)
+	}
+}
+
+// Присланное значение доходит до сервиса, и подстановка одного поля не
+// затирает другое: fakeipPool6 прислан, interceptFamily — нет.
+func TestRouterPutSettings_InterceptFamilyAndPool6Independent(t *testing.T) {
+	svc := &mockRouterSvc{settings: storage.SingboxRouterSettings{InterceptFamily: "both", FakeIPPool6: "fc00::/18"}}
+	h := newMockRouterHandler(svc)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/singbox/router/settings",
+		strings.NewReader(`{"enabled":true,"wanAutoDetect":true,"fakeipPool6":""}`))
+	rr := httptest.NewRecorder()
+	h.PutSettings(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+	if svc.settings.InterceptFamily != "both" || svc.settings.FakeIPPool6 != "" {
+		t.Errorf("family=%q pool6=%q, want \"both\" и \"\"", svc.settings.InterceptFamily, svc.settings.FakeIPPool6)
+	}
+
+	req = httptest.NewRequest(http.MethodPut, "/api/singbox/router/settings",
+		strings.NewReader(`{"enabled":true,"wanAutoDetect":true,"interceptFamily":"ipv6_only"}`))
+	rr = httptest.NewRecorder()
+	h.PutSettings(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+	if svc.settings.InterceptFamily != "ipv6_only" {
+		t.Errorf("interceptFamily = %q, want \"ipv6_only\"", svc.settings.InterceptFamily)
+	}
+}
+
 // F434 (#941): отказ по небезопасному тегу inline-набора — ошибка ввода, а не
 // сбой демона: 400 с кодом, который фронт покажет пользователю, вместо 500.
 func TestRouterAddRuleSet_UnsafeTag_Returns400(t *testing.T) {

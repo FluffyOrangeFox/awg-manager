@@ -19,10 +19,17 @@ type GeoSource interface {
 type PopulateInput struct {
 	GeoIPTags []string
 	SavePath  string // "" — save-файл не писать (тесты)
+	// V6 — наполнять и IPv6-близнеца (AWGM-BYPASS6) IPv6-записями тех же
+	// тегов. false — IPv6-записи .dat пропускаются, как и раньше; сам набор
+	// при этом не трогается: его сносит v6-слой роутера.
+	V6 bool
+	// SavePath6 — дамп AWGM-BYPASS6 для v6-хука. "" — не писать.
+	SavePath6 string
 }
 
 // PopulateResult — итог наполнения: размер живого набора (CountOK=false —
 // счётчик получить не удалось, ноль недостоверен) и теги, которых нет в .dat.
+// При V6 EntryCount — сумма по обоим наборам.
 type PopulateResult struct {
 	EntryCount  int
 	CountOK     bool
@@ -52,6 +59,9 @@ func Populate(ctx context.Context, geo GeoSource, in PopulateInput) (PopulateRes
 		chunk = chunk[:0]
 		return err
 	}
+	// IPv6-записи копятся целиком и заливаются отдельным проходом после
+	// IPv4: у каждого семейства свой черновик и свой swap.
+	var entries6 []string
 	for _, tag := range in.GeoIPTags {
 		lines, notFound, err := geo.GeoIPTagLines(tag)
 		if notFound {
@@ -68,6 +78,12 @@ func Populate(ctx context.Context, geo GeoSource, in PopulateInput) (PopulateRes
 					if err := flush(); err != nil {
 						return res, fmt.Errorf("populate staging: %w", err)
 					}
+				}
+				continue
+			}
+			if in.V6 {
+				if c := NormalizeEntry6(l); c != "" {
+					entries6 = append(entries6, c)
 				}
 			}
 		}
@@ -87,17 +103,31 @@ func Populate(ctx context.Context, geo GeoSource, in PopulateInput) (PopulateRes
 			return res, fmt.Errorf("ipset save: %w", err)
 		}
 	}
+	if in.V6 {
+		n6, ok6, err := populate6(ctx, entries6, in.SavePath6)
+		res.EntryCount += n6
+		res.CountOK = res.CountOK && ok6
+		if err != nil {
+			// IPv4-набор уже собран и сохранён; отказ IPv6-половины отдаём
+			// отдельной причиной, чтобы она не выглядела как сбой всего набора.
+			return res, fmt.Errorf("ipv6: %w", err)
+		}
+	}
 	return res, nil
 }
 
 // writeSaveFile кладёт дамп живого набора в path — источник восстановления
 // набора после перезагрузки роутера.
 func writeSaveFile(ctx context.Context, path string) error {
+	return writeSaveFileOf(ctx, SetName, path)
+}
+
+func writeSaveFileOf(ctx context.Context, name, path string) error {
 	bin, err := ipsetBin()
 	if err != nil {
 		return err
 	}
-	r, err := runIpsetCtl(ctx, bin, "save", SetName)
+	r, err := runIpsetCtl(ctx, bin, "save", name)
 	if err != nil {
 		return sysexec.FormatError(r, err)
 	}

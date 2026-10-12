@@ -22,7 +22,7 @@ func routerListenPorts() []int {
 		tp, rp := QoSClassPorts(slot)
 		ports = append(ports, tp, rp)
 	}
-	return ports
+	return append(ports, v6ListenPorts()...)
 }
 
 // ReserveListenPorts убирает порты инбаундов sb-router из эфемерного пула

@@ -561,6 +561,31 @@ type ServiceImpl struct {
 	// TestReconcileInstalled_BlackholeFollowsWANIPChange.
 	appliedBlackhole *RestoreInputSpec
 
+	// appliedV6 — снимок ТРЕТЬЕГО ресурса: правил перехвата IPv6
+	// (iptables6.go). nil = v6-слой этим процессом не ставился; факт «стоит в
+	// ядре» после рестарта демона несёт файл правил (v6RulesFilePresent).
+	// Писатели и сериализация те же, что у appliedSpec: syncV6/teardownV6 под
+	// transitionMu.
+	appliedV6 *V6Spec
+	// appliedBlackhole6 — снимок fail-closed блокировки IPv6, зеркало
+	// appliedBlackhole: nil = блокировки нет. Сравнение — equalBlackholeSpec6.
+	appliedBlackhole6 *V6Spec
+	// v6LastWarn — последнее предупреждение v6-слоя, чтобы не повторять его
+	// каждым тиком reconcile (см. v6Warn).
+	v6LastWarn string
+	// v6Problem — то же предупреждение для GetStatus: почему перехват IPv6
+	// включён в настройках, но не работает. Atomic, потому что пишет его
+	// reconcile-тик, а читает HTTP-обработчик статуса; nil — проблем нет.
+	v6Problem atomic.Pointer[string]
+	// v6SkippedLogged — список пропущенных мостов, о котором уже написано в
+	// журнал. Отдельно от v6LastWarn: пропуск моста не мешает слою встать, и
+	// общий сброс предупреждения после успешной установки заставлял бы писать
+	// о нём каждым тиком.
+	v6SkippedLogged string
+	// v6OffSettled — при выключенном слое конфиг уже проверен и наших
+	// инбаундов в нём нет (см. healV6Inbounds).
+	v6OffSettled bool
+
 	// last-installed geoip-теги обхода; в спеке от них остаётся только
 	// производный BypassGeoIPSet, то есть состав тегов из снимка
 	// невосстановим. Поэтому смена состава видна ТОЛЬКО здесь — и это триггер
@@ -653,6 +678,8 @@ type ServiceImpl struct {
 	keenDNSAddrs       []string
 	keenDNSInfoAt      time.Time
 	keenDNSBypassCIDRs []string
+	// keenDNSBypassCIDRs6 — IPv6-часть того же обхода, для правил v6-слоя.
+	keenDNSBypassCIDRs6 []string
 }
 
 func NewService(d Deps) *ServiceImpl {

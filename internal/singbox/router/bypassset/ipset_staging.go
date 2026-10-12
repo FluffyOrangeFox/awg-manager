@@ -73,6 +73,12 @@ func ChunkedAddStaging(ctx context.Context, cidrs []string) error {
 }
 
 func chunkedAddToSet(ctx context.Context, setName string, cidrs []string) error {
+	return chunkedAddToSetWith(ctx, setName, cidrs, NormalizeEntry)
+}
+
+// chunkedAddToSetWith — chunkedAddToSet с заданным нормализатором записей:
+// наборы inet и inet6 принимают разные семейства адресов.
+func chunkedAddToSetWith(ctx context.Context, setName string, cidrs []string, norm func(string) string) error {
 	if len(cidrs) == 0 {
 		return nil
 	}
@@ -81,14 +87,14 @@ func chunkedAddToSet(ctx context.Context, setName string, cidrs []string) error 
 		if end > len(cidrs) {
 			end = len(cidrs)
 		}
-		if err := addEntriesToSet(ctx, setName, cidrs[i:end]); err != nil {
+		if err := addEntriesToSet(ctx, setName, cidrs[i:end], norm); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func addEntriesToSet(ctx context.Context, setName string, cidrs []string) error {
+func addEntriesToSet(ctx context.Context, setName string, cidrs []string, norm func(string) string) error {
 	if len(cidrs) == 0 {
 		return nil
 	}
@@ -103,7 +109,7 @@ func addEntriesToSet(ctx context.Context, setName string, cidrs []string) error 
 		ipsetChunkPool.Put(bufPtr)
 	}()
 
-	if writeRestoreLines(b, setName, cidrs) == 0 {
+	if writeRestoreLinesWith(b, setName, cidrs, norm) == 0 {
 		return nil
 	}
 	res, err := sysexec.RunWithOptions(ctx, bin, []string{"restore", "-exist"},
@@ -119,9 +125,13 @@ func addEntriesToSet(ctx context.Context, setName string, cidrs []string) error 
 // out of addEntriesToSet so tests can assert the exact piped format without
 // running ipset.
 func writeRestoreLines(b *bytes.Buffer, setName string, cidrs []string) int {
+	return writeRestoreLinesWith(b, setName, cidrs, NormalizeEntry)
+}
+
+func writeRestoreLinesWith(b *bytes.Buffer, setName string, cidrs []string, norm func(string) string) int {
 	valid := 0
 	for _, raw := range cidrs {
-		entry := NormalizeEntry(raw)
+		entry := norm(raw)
 		if entry == "" {
 			continue
 		}
@@ -132,6 +142,10 @@ func writeRestoreLines(b *bytes.Buffer, setName string, cidrs []string) int {
 }
 
 func createNamedSet(ctx context.Context, name string) error {
+	return createNamedSetFamily(ctx, name, familyInet)
+}
+
+func createNamedSetFamily(ctx context.Context, name, family string) error {
 	bin, err := ipsetBin()
 	if err != nil {
 		return err
@@ -139,7 +153,7 @@ func createNamedSet(ctx context.Context, name string) error {
 	res, err := runIpsetCtl(ctx, bin,
 		"create", name, "hash:net",
 		"maxelem", fmt.Sprintf("%d", SetMaxElem),
-		"family", "inet",
+		"family", family,
 	)
 	if err != nil {
 		combined := ""
@@ -155,6 +169,12 @@ func createNamedSet(ctx context.Context, name string) error {
 }
 
 func flushNamedSet(ctx context.Context, name string) error {
+	return flushNamedSetFamily(ctx, name, familyInet)
+}
+
+// flushNamedSetFamily очищает набор, а отсутствующий — создаёт пустым в
+// заданном семействе.
+func flushNamedSetFamily(ctx context.Context, name, family string) error {
 	bin, err := ipsetBin()
 	if err != nil {
 		return err
@@ -166,7 +186,7 @@ func flushNamedSet(ctx context.Context, name string) error {
 			combined = res.Stdout + res.Stderr
 		}
 		if strings.Contains(combined, "does not exist") || strings.Contains(combined, "not found") {
-			return createNamedSet(ctx, name)
+			return createNamedSetFamily(ctx, name, family)
 		}
 		return sysexec.FormatError(res, fmt.Errorf("ipset flush %s: %w", name, err))
 	}

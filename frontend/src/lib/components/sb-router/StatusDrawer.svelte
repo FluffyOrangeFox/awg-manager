@@ -225,6 +225,15 @@
     wanAutoOverride = override;
     if (patch) void applyPatch(patch);
   }
+  async function onInterceptFamilyChange(e: Event) {
+    const el = e.currentTarget as HTMLSelectElement;
+    const v = el.value;
+    if (v !== 'ipv4_only' && v !== 'both' && v !== 'ipv6_only') return;
+    await applyPatch({ interceptFamily: v });
+    // Бэкенд отвергает IPv6 без пакета ip6tables: возвращаем сохранённое
+    // значение, иначе список показывал бы режим, который не применился.
+    if (lastError) el.value = cfg?.interceptFamily ?? 'ipv4_only';
+  }
   function onCacheLocationChange(e: Event) {
     const v = (e.currentTarget as HTMLSelectElement).value;
     if (v === 'flash' || v === 'tmp') void applyPatch({ cacheFileLocation: v });
@@ -426,6 +435,26 @@
           variant="expert"
           onPatch={(patch) => void applyPatch(patch)}
         />
+
+        <!-- Семейства адресов — тоже только TPROXY: в tun-режимах их задаёт
+             адресация tun-интерфейса. -->
+        <section class="sec">
+          <div class="sec-cap">{m.sb_router_status_sec_family()}</div>
+          <div class="field">
+            <label class="lbl" for="ed-family">{m.sb_router_status_family_label()}</label>
+            <select
+              id="ed-family"
+              class="inp"
+              value={cfg.interceptFamily ?? 'ipv4_only'}
+              onchange={onInterceptFamilyChange}
+            >
+              <option value="ipv4_only">{m.sb_router_status_family_ipv4_only()}</option>
+              <option value="both">{m.sb_router_status_family_both()}</option>
+              <option value="ipv6_only">{m.sb_router_status_family_ipv6_only()}</option>
+            </select>
+          </div>
+          <p class="hint">{m.sb_router_status_family_hint()}</p>
+        </section>
       {/if}
 
       <!-- WAN-интерфейс -->

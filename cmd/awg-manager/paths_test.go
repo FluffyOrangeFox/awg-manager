@@ -54,6 +54,13 @@ func TestApplyDataDir_RedirectsRouterPaths(t *testing.T) {
 		"netfilterNatRulesPath":    filepath.Join(sub, "router-netfilter-nat.rules"),
 		"netfilterCtCleanPath":     filepath.Join(sub, "awgm-ctclean.sh"),
 		"bypassSavePath":           filepath.Join(sub, "bypass.ipset"),
+		// Правила перехвата IPv6 (iptables6.go). Их хук лежит рядом с v4-хуком
+		// и уходит вместе с ним — отдельного пути у него нет.
+		"netfilter6RulesPath":       filepath.Join(sub, "router-netfilter6.rules"),
+		"netfilter6MangleRulesPath": filepath.Join(sub, "router-netfilter6-mangle.rules"),
+		"netfilter6NatRulesPath":    filepath.Join(sub, "router-netfilter6-nat.rules"),
+		"bypassSave6Path":           filepath.Join(sub, "bypass6.ipset"),
+		"netfilter6BlackholePath":   filepath.Join(sub, "router-blackhole6.rules"),
 	}
 	got := router.DataDirPaths()
 	if len(got) != len(want) {

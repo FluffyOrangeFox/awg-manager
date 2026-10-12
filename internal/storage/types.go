@@ -243,6 +243,12 @@ type SingboxRouterSettings struct {
 	// filter. "all" installs unmarked PREROUTING jumps so every LAN
 	// device that reaches the router netfilter path is filtered.
 	DeviceMode string `json:"deviceMode,omitempty"`
+	// InterceptFamily — какие семейства адресов перехватывает режим tproxy:
+	// "ipv4_only" (по умолчанию, историческое поведение), "both" или
+	// "ipv6_only". Пусто = "ipv4_only": установки, обновившиеся с версии без
+	// поля, не начинают перехватывать IPv6 сами. В tun-режимах не участвует —
+	// там семейства задаёт адресация tun-интерфейса.
+	InterceptFamily string `json:"interceptFamily,omitempty"`
 	// RoutingMode selects the sing-box routing path:
 	// "tproxy" (default) keeps the historical TPROXY/REDIRECT behavior;
 	// "fakeip-tun" routes via a fake-IP DNS pool + tun device;
@@ -276,9 +282,11 @@ type SingboxRouterSettings struct {
 	// exclusions in "PORT UDP|TCP" format (e.g. "51820 UDP, 1194 TCP").
 	// Parsed at iptables generation time. Empty = no extras.
 	BypassExtraPorts string `json:"bypassExtraPorts,omitempty"`
-	// BypassExtraSubnets — пользовательский список IPv4 IP/CIDR через
-	// запятую/пробел (напр. "203.0.113.0/24, 10.8.0.5"). Трафик к ним идёт
-	// целиком мимо sing-box (включая DNS/53). Голый IP трактуется как /32.
+	// BypassExtraSubnets — пользовательский список IP/CIDR через
+	// запятую/пробел (напр. "203.0.113.0/24, 10.8.0.5, 2001:db8::/32"). Трафик
+	// к ним идёт целиком мимо sing-box (включая DNS/53). Голый IP трактуется
+	// как /32, голый IPv6 — как /128. IPv6-записи действуют при перехвате IPv6
+	// (InterceptFamily).
 	// Парсится в момент генерации правил. Пусто = нет исключений.
 	BypassExtraSubnets string `json:"bypassExtraSubnets,omitempty"`
 	// BypassGeoIPTags — geoip-теги из настроенных .dat, чьи CIDR уходят в WAN

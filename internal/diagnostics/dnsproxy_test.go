@@ -350,3 +350,24 @@ func TestStaticIPv4InZones(t *testing.T) {
 		t.Fatalf("без зон и имён совпадений быть не может: %v", v)
 	}
 }
+
+// IPv6-адреса тех же имён — для правил перехвата IPv6: берутся только
+// static_aaaa из зон KeenDNS, запись A с тем же хостом сюда не попадает.
+func TestStaticIPv6InZones(t *testing.T) {
+	hosts := []string{"my.keenetic.net"}
+	zones := []string{"keenetic.pro", "netcraze.pro"}
+	proxies := []DNSProxy{{Name: "System", Static: []DNSStaticRecord{
+		{Host: "example.keenetic.pro", Type: "A", Value: "198.51.100.11"},
+		{Host: "example.keenetic.pro", Type: "AAAA", Value: "2001:2::c633:640b"},
+		{Host: "example.netcraze.pro", Type: "AAAA", Value: "2001:2::C633:640B"}, // тот же адрес
+		{Host: "чужое.example.com", Type: "AAAA", Value: "2001:db8::1"},
+		{Host: "битая.keenetic.pro", Type: "AAAA", Value: "198.51.100.11"}, // не IPv6
+	}}}
+	got := StaticIPv6InZones(proxies, hosts, zones)
+	if len(got) != 1 || got[0] != "2001:2::c633:640b" {
+		t.Fatalf("StaticIPv6InZones = %v, want [2001:2::c633:640b]", got)
+	}
+	if v := StaticIPv4InZones(proxies, hosts, zones); len(v) != 1 || v[0] != "198.51.100.11" {
+		t.Fatalf("StaticIPv4InZones не должен измениться: %v", v)
+	}
+}

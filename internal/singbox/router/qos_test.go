@@ -84,9 +84,11 @@ func TestActiveQoSClasses_FiltersAndUsesSlotPorts(t *testing.T) {
 		{DSCP: 22, Outbound: "vpn-h", Enabled: true, Slot: -1},            // negative slot → dropped
 	}
 	got := activeQoSClasses(classes)
+	// Порты IPv6-пары заполняются всегда и от того же слота; признак V6
+	// ставит только qosClassesFor.
 	want := []qosClass{
-		{DSCP: 46, Outbound: "vpn-a", TProxyPort: 51284, RedirectPort: 51304},
-		{DSCP: 26, Outbound: "vpn-d", TProxyPort: 51281, RedirectPort: 51301},
+		{DSCP: 46, Outbound: "vpn-a", TProxyPort: 51284, RedirectPort: 51304, TProxy6Port: 51344, Redirect6Port: 51364},
+		{DSCP: 26, Outbound: "vpn-d", TProxyPort: 51281, RedirectPort: 51301, TProxy6Port: 51341, Redirect6Port: 51361},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("activeQoSClasses = %+v, want %+v", got, want)

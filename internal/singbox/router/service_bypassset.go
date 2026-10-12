@@ -157,17 +157,25 @@ func (s *ServiceImpl) TriggerBypassSetPopulate() {
 func (s *ServiceImpl) runBypassPopulate(tags []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), bypassPopulateTimeout)
 	defer cancel()
-	res, err := s.populateBypassSetOnce(ctx, tags)
+	// IPv6-набор наполняется тем же проходом, но только при включённом
+	// перехвате IPv6 (см. ensureBypassSet6).
+	v6 := s.bypassSet6Wanted()
+	res, err := s.populateBypassSetOnce(ctx, tags, v6)
 	if _, wanted, wErr := s.bypassSetWanted(); wErr == nil && !wanted {
 		// ctx мог истечь вместе с наполнением — снос идёт по своему.
 		s.teardownBypassSet(context.Background())
 		return
 	}
+	// То же для IPv6-набора: пока шло наполнение, перехват IPv6 могли
+	// выключить — слой уже снял правила и снёс набор, а наш swap его воскресил.
+	if v6 && !s.bypassSet6Wanted() {
+		_ = dropBypassSet6(context.Background())
+	}
 	s.storeBypassSetOutcome(res, err)
 }
 
 // populateBypassSetOnce — продакшн-наполнение (или тест-шов, если задан).
-func (s *ServiceImpl) populateBypassSetOnce(ctx context.Context, tags []string) (bypassset.PopulateResult, error) {
+func (s *ServiceImpl) populateBypassSetOnce(ctx context.Context, tags []string, v6 bool) (bypassset.PopulateResult, error) {
 	if s.populateBypassSet != nil {
 		return s.populateBypassSet(ctx, tags)
 	}
@@ -177,6 +185,8 @@ func (s *ServiceImpl) populateBypassSetOnce(ctx context.Context, tags []string) 
 	return bypassset.Populate(ctx, geoSourceAdapter{files: s.deps.GeoTagCounts}, bypassset.PopulateInput{
 		GeoIPTags: tags,
 		SavePath:  bypassSavePath,
+		V6:        v6,
+		SavePath6: bypassSave6Path,
 	})
 }
 

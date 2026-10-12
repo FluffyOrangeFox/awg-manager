@@ -5728,9 +5728,11 @@ definitions:
         type: string
       bypassExtraSubnets:
         description: |-
-          BypassExtraSubnets is a user-defined comma/space-separated list of IPv4
+          BypassExtraSubnets is a user-defined comma/space-separated list of
           IP/CIDR destinations whose traffic bypasses sing-box entirely (incl.
-          DNS/53). Bare IP is treated as /32. E.g. "203.0.113.0/24, 10.8.0.5".
+          DNS/53). Bare IPv4 is treated as /32, bare IPv6 as /128. IPv6 entries take
+          effect when IPv6 is intercepted (interceptFamily). E.g.
+          "203.0.113.0/24, 10.8.0.5, 2001:db8::/32".
         example: 203.0.113.0/24
         type: string
       bypassGeoipTags:
@@ -5817,6 +5819,18 @@ definitions:
         items:
           type: string
         type: array
+      interceptFamily:
+        description: |-
+          InterceptFamily selects which address families the tproxy mode intercepts.
+          Default "ipv4_only" (historical behaviour). "both" and "ipv6_only" need the
+          ip6tables package on the router (400 IP6TABLES_MISSING otherwise). An
+          OMITTED field keeps the stored value. Ignored by the tun modes.
+        enum:
+        - ipv4_only
+        - both
+        - ipv6_only
+        example: ipv4_only
+        type: string
       policyName:
         example: awgm-router
         type: string

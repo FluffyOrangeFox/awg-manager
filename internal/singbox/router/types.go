@@ -285,7 +285,10 @@ type Inbound struct {
 	Listen     string `json:"listen,omitempty"`
 	ListenPort int    `json:"listen_port,omitempty"`
 	Network    string `json:"network,omitempty"`
-	UDPTimeout string `json:"udp_timeout,omitempty"`
+	// BindInterface привязывает слушающий сокет (и сокеты ответов tproxy) к
+	// интерфейсу. Нужен v6-инбаундам tproxy6-in-<мост> — см. iptables6.go.
+	BindInterface string `json:"bind_interface,omitempty"`
+	UDPTimeout    string `json:"udp_timeout,omitempty"`
 	// UDPNATMax — потолок UDP-NAT-сессий inbound'а (sing-box 1.14, LRU). 0 =
 	// авто (4096-16384 по памяти) и ключ не пишется.
 	UDPNATMax   int  `json:"udp_nat_max,omitempty"`

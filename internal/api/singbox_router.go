@@ -167,18 +167,20 @@ func (h *SingboxRouterHandler) PutSettings(w http.ResponseWriter, r *http.Reques
 	// ключа молча выключал бы его (узор дефекта PR #757, routingMode). Правило
 	// encoding/json: поле меньшей глубины перехватывает ключ у embedded-
 	// структуры — body.FakeIPPool6 видит JSON, embedded-поле остаётся "".
+	//
+	// interceptFamily — тот же узор: клиент, не знающий поля (старый фронтенд,
+	// скрипт), прислал бы "" и молча выключил перехват IPv6.
 	var body struct {
 		storage.SingboxRouterSettings
-		FakeIPPool6 *string `json:"fakeipPool6"`
+		FakeIPPool6     *string `json:"fakeipPool6"`
+		InterceptFamily *string `json:"interceptFamily"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		response.BadRequest(w, err.Error())
 		return
 	}
 	sr := body.SingboxRouterSettings
-	if body.FakeIPPool6 != nil {
-		sr.FakeIPPool6 = *body.FakeIPPool6
-	} else {
+	if body.FakeIPPool6 == nil || body.InterceptFamily == nil {
 		// Absent = не менять: подставляем текущее значение (нормализация
 		// возвращает pool6 дословно, включая "").
 		cur, err := h.svc.GetSettings(r.Context())
@@ -187,6 +189,13 @@ func (h *SingboxRouterHandler) PutSettings(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		sr.FakeIPPool6 = cur.FakeIPPool6
+		sr.InterceptFamily = cur.InterceptFamily
+	}
+	if body.FakeIPPool6 != nil {
+		sr.FakeIPPool6 = *body.FakeIPPool6
+	}
+	if body.InterceptFamily != nil {
+		sr.InterceptFamily = *body.InterceptFamily
 	}
 	if err := h.svc.UpdateSettings(r.Context(), sr); err != nil {
 		h.handleErr(w, "request", err)
@@ -271,6 +280,9 @@ func (h *SingboxRouterHandler) handleErr(w http.ResponseWriter, action string, e
 		// 400 with the detailed Russian message (DSCP range/duplicate/limit/
 		// outbound) intact so the settings UI can surface it verbatim.
 		response.Error(w, err.Error(), "QOS_CLASSES_INVALID")
+	case errors.Is(err, router.ErrIP6TablesMissing):
+		// 400: выбран перехват IPv6, а пакета ip6tables на роутере нет.
+		response.Error(w, err.Error(), "IP6TABLES_MISSING")
 	case errors.Is(err, router.ErrDNSChainTagReserved):
 		// 400: пространство тегов awgm-dns-* принадлежит оверлею DNS-пресета —
 		// занять его пользовательским правилом нельзя.

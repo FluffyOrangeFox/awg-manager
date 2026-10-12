@@ -76,6 +76,11 @@ type SingboxRouterSettingsData struct {
 	DeviceMode     string `json:"deviceMode,omitempty" example:"policy" enums:"policy,all"`
 	RoutingMode    string `json:"routingMode,omitempty" example:"tproxy" enums:"tproxy,fakeip-tun,policy-tun"`
 	SnifferEnabled bool   `json:"snifferEnabled" example:"true"`
+	// InterceptFamily selects which address families the tproxy mode intercepts.
+	// Default "ipv4_only" (historical behaviour). "both" and "ipv6_only" need the
+	// ip6tables package on the router (400 IP6TABLES_MISSING otherwise). An
+	// OMITTED field keeps the stored value. Ignored by the tun modes.
+	InterceptFamily string `json:"interceptFamily,omitempty" example:"ipv4_only" enums:"ipv4_only,both,ipv6_only"`
 	// WANAutoDetect / WANInterface form a two-field discriminator:
 	//   true  + ""    → sing-box auto_detect_interface
 	//   false + "ppp0"→ sing-box default_interface=ppp0
@@ -93,9 +98,11 @@ type SingboxRouterSettingsData struct {
 	// BypassExtraPorts is a user-defined comma-separated list of extra
 	// port exclusions in "PORT UDP|TCP" format (e.g. "51820 UDP, 1194 TCP").
 	BypassExtraPorts string `json:"bypassExtraPorts,omitempty" example:"51820 UDP"`
-	// BypassExtraSubnets is a user-defined comma/space-separated list of IPv4
+	// BypassExtraSubnets is a user-defined comma/space-separated list of
 	// IP/CIDR destinations whose traffic bypasses sing-box entirely (incl.
-	// DNS/53). Bare IP is treated as /32. E.g. "203.0.113.0/24, 10.8.0.5".
+	// DNS/53). Bare IPv4 is treated as /32, bare IPv6 as /128. IPv6 entries take
+	// effect when IPv6 is intercepted (interceptFamily). E.g.
+	// "203.0.113.0/24, 10.8.0.5, 2001:db8::/32".
 	BypassExtraSubnets string `json:"bypassExtraSubnets,omitempty" example:"203.0.113.0/24"`
 	// BypassGeoipTags lists geoip tags from the configured .dat files whose
 	// CIDRs bypass sing-box entirely via the AWGM-BYPASS ipset (same full

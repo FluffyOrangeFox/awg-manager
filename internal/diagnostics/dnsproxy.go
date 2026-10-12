@@ -263,8 +263,19 @@ func isSimpleToken(s string) bool {
 // KeenDNS-имена, и трафик к ним обязан идти мимо sing-box. Брать их надо
 // именно с роутера — с прошивок 5.1.3/5.2 адрес сервиса переехал с
 // 78.47.125.180 в документационный 198.51.100.0/24 и отличается у Keenetic
-// и NetCraze. AAAA сознательно не отдаём: перехвата IPv6 у нас нет.
+// и NetCraze. AAAA отдаёт StaticIPv6InZones — для перехвата IPv6.
 func StaticIPv4InZones(proxies []DNSProxy, hosts, zones []string) []string {
+	return staticIPsInZones(proxies, hosts, zones, "A")
+}
+
+// StaticIPv6InZones — то же для static_aaaa: IPv6-адреса, к которым роутер
+// направляет свои KeenDNS-имена. Нужны правилам ip6tables.
+func StaticIPv6InZones(proxies []DNSProxy, hosts, zones []string) []string {
+	return staticIPsInZones(proxies, hosts, zones, "AAAA")
+}
+
+// staticIPsInZones — общая выборка статических записей заданного типа.
+func staticIPsInZones(proxies []DNSProxy, hosts, zones []string, typ string) []string {
 	match := func(name string) bool {
 		n := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
 		if n == "" {
@@ -287,11 +298,11 @@ func StaticIPv4InZones(proxies []DNSProxy, hosts, zones []string) []string {
 	seen := map[string]struct{}{}
 	for _, p := range proxies {
 		for _, r := range p.Static {
-			if r.Type != "A" || !match(r.Host) {
+			if r.Type != typ || !match(r.Host) {
 				continue
 			}
 			ip := net.ParseIP(r.Value)
-			if ip == nil || ip.To4() == nil {
+			if ip == nil || (ip.To4() != nil) != (typ == "A") {
 				continue
 			}
 			v := ip.String()

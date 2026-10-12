@@ -2,6 +2,7 @@ package router
 
 import (
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 
@@ -31,6 +32,12 @@ const (
 	// ranges do not overlap each other (51281+8 = 51289 < 51301).
 	QoSTPROXYPortBase   = 51281
 	QoSRedirectPortBase = 51301
+
+	// QoS6TPROXYPortBase / QoS6RedirectPortBase — те же диапазоны для
+	// IPv6-пары инбаундов класса (перехват IPv6, iptables6.go): UDP TPROXY
+	// 51341-51348, TCP REDIRECT 51361-51368.
+	QoS6TPROXYPortBase   = 51341
+	QoS6RedirectPortBase = 51361
 )
 
 // QoSClassPorts returns the deterministic (tproxy, redirect) listen-port pair
@@ -41,6 +48,11 @@ const (
 // would shift when another class is disabled/removed, RSTing untouched flows.
 func QoSClassPorts(slot int) (tproxyPort, redirectPort int) {
 	return QoSTPROXYPortBase + slot, QoSRedirectPortBase + slot
+}
+
+// QoSClassPorts6 — порты IPv6-пары инбаундов класса; тот же стабильный слот.
+func QoSClassPorts6(slot int) (tproxyPort, redirectPort int) {
+	return QoS6TPROXYPortBase + slot, QoS6RedirectPortBase + slot
 }
 
 // qosTProxyTagPrefix / qosRedirectTagPrefix form the RESERVED inbound-tag
@@ -58,6 +70,12 @@ const (
 func qosTProxyTag(dscp int) string   { return fmt.Sprintf("%s%d", qosTProxyTagPrefix, dscp) }
 func qosRedirectTag(dscp int) string { return fmt.Sprintf("%s%d", qosRedirectTagPrefix, dscp) }
 
+// qosTProxy6Tag / qosRedirect6Tag — теги IPv6-пары класса. Суффикс, а не свой
+// префикс: так они остаются в зарезервированном пространстве qos-* и
+// ensureQoSInbounds пересобирает их вместе с IPv4-парой.
+func qosTProxy6Tag(dscp int) string   { return qosTProxyTag(dscp) + "-v6" }
+func qosRedirect6Tag(dscp int) string { return qosRedirectTag(dscp) + "-v6" }
+
 // isQoSInboundTag reports whether tag belongs to the reserved QoS inbound
 // namespace (either protocol prefix).
 func isQoSInboundTag(tag string) bool {
@@ -71,6 +89,12 @@ type qosClass struct {
 	Outbound     string
 	TProxyPort   int
 	RedirectPort int
+	// TProxy6Port / Redirect6Port — порты IPv6-пары; заполнены всегда.
+	TProxy6Port   int
+	Redirect6Port int
+	// V6 — классу нужна IPv6-пара инбаундов (перехват IPv6 включён). Ставит
+	// qosClassesFor; у activeQoSClasses он всегда false.
+	V6 bool
 }
 
 // activeQoSClasses filters settings classes down to the enabled, valid ones
@@ -102,11 +126,58 @@ func activeQoSClasses(classes []storage.SingboxQoSClass) []qosClass {
 		seenDSCP[c.DSCP] = true
 		seenSlot[c.Slot] = true
 		tp, rp := QoSClassPorts(c.Slot)
+		tp6, rp6 := QoSClassPorts6(c.Slot)
 		out = append(out, qosClass{
+			DSCP:          c.DSCP,
+			Outbound:      outbound,
+			TProxyPort:    tp,
+			RedirectPort:  rp,
+			TProxy6Port:   tp6,
+			Redirect6Port: rp6,
+		})
+	}
+	return out
+}
+
+// ipv6StackPresent — есть ли в ядре IPv6. Шов для тестов.
+var ipv6StackPresent = func() bool {
+	_, err := os.Stat("/proc/net/if_inet6")
+	return err == nil
+}
+
+// qosV6Enabled — нужны ли классам IPv6-инбаунды: только в режиме tproxy с
+// перехватом IPv6. Гейт на наличие IPv6 в ядре обязателен: инбаунд на `::`
+// без него не привяжется, и sing-box отвергнет весь конфиг.
+func qosV6Enabled(sr storage.SingboxRouterSettings) bool {
+	tproxy := sr.RoutingMode == "" || sr.RoutingMode == "tproxy"
+	return tproxy && familyHasV6(sr.InterceptFamily) && ipv6StackPresent()
+}
+
+// qosClassesFor — активные классы с учётом перехвата IPv6. Режим tproxy зовёт
+// её вместо activeQoSClasses везде, где из классов строятся инбаунды, правила
+// маршрутизации или правила ip6tables.
+func qosClassesFor(sr storage.SingboxRouterSettings) []qosClass {
+	classes := activeQoSClasses(sr.QoSClasses)
+	if qosV6Enabled(sr) {
+		for i := range classes {
+			classes[i].V6 = true
+		}
+	}
+	return classes
+}
+
+// qosIPTablesSpecs6 — проекция классов для правил ip6tables: тот же DTO, что у
+// IPv4, но с портами IPv6-пары. Классы без V6 пропускаются.
+func qosIPTablesSpecs6(classes []qosClass) []QoSClassSpec {
+	var out []QoSClassSpec
+	for _, c := range classes {
+		if !c.V6 {
+			continue
+		}
+		out = append(out, QoSClassSpec{
 			DSCP:         c.DSCP,
-			Outbound:     outbound,
-			TProxyPort:   tp,
-			RedirectPort: rp,
+			TProxyPort:   c.TProxy6Port,
+			RedirectPort: c.Redirect6Port,
 		})
 	}
 	return out
@@ -169,6 +240,28 @@ func ensureQoSInbounds(in []Inbound, classes []qosClass, udpTimeout string, udpN
 			Tag:         qosRedirectTag(c.DSCP),
 			Listen:      redirectListen,
 			ListenPort:  c.RedirectPort,
+			TCPFastOpen: true,
+		})
+		if !c.V6 {
+			continue
+		}
+		// IPv6-пара. Привязка к мосту (как у tproxy6-in-<мост>) не нужна:
+		// она требуется только для ответов с link-local адреса, а DNS и
+		// link-local назначения до диспатча по DSCP не доходят.
+		kept = append(kept, Inbound{
+			Type:        "tproxy",
+			Tag:         qosTProxy6Tag(c.DSCP),
+			Listen:      tproxy6Listen,
+			ListenPort:  c.TProxy6Port,
+			Network:     "udp",
+			UDPFragment: true,
+			UDPTimeout:  effective,
+			UDPNATMax:   udpNATMax,
+		}, Inbound{
+			Type:        "redirect",
+			Tag:         qosRedirect6Tag(c.DSCP),
+			Listen:      redirect6Listen,
+			ListenPort:  c.Redirect6Port,
 			TCPFastOpen: true,
 		})
 	}

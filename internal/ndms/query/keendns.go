@@ -23,6 +23,8 @@ type KeenDNSInfo struct {
 	// статической записи у ndnproxy нет, и это единственный источник адреса
 	// для обхода пресета keendns.
 	Address string `json:"address"`
+	// Address6 — то же для IPv6; пусто, если доступа по IPv6 нет.
+	Address6 string `json:"address6"`
 	// Access — режим доступа по имени. Значение `direct` означает прямой
 	// доступ к белому статическому адресу роутера; ЛЮБОЕ другое значение —
 	// доступ через прокси NDMS, который проксирует HTTP, а не произвольный
@@ -122,7 +124,9 @@ func parseKeenDNS(raw []byte) *KeenDNSInfo {
 		Booked  string `json:"booked"`
 		Domain  string `json:"domain"`
 		Address string `json:"address"`
-		Access  string `json:"access"`
+		// address6 — тот же ключ, что печатает `show ndns` рядом с address.
+		Address6 string `json:"address6"`
+		Access   string `json:"access"`
 	}
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return nil
@@ -133,9 +137,10 @@ func parseKeenDNS(raw []byte) *KeenDNSInfo {
 		return nil
 	}
 	return &KeenDNSInfo{
-		Domain:  booked + "." + domain,
-		Enabled: true,
-		Address: strings.TrimSpace(v.Address),
-		Access:  strings.TrimSpace(v.Access),
+		Domain:   booked + "." + domain,
+		Enabled:  true,
+		Address:  strings.TrimSpace(v.Address),
+		Address6: strings.TrimSpace(v.Address6),
+		Access:   strings.TrimSpace(v.Access),
 	}
 }

@@ -13,6 +13,16 @@ func TestRouterListenPortsCoversEveryInbound(t *testing.T) {
 		tp, rp := QoSClassPorts(slot)
 		want[tp], want[rp] = false, false
 	}
+	// v6-слой: TCP-инбаунд, общий UDP-инбаунд, по UDP-инбаунду на каждый
+	// возможный мост и IPv6-пары классов QoS.
+	want[Redirect6Port], want[TProxy6Port] = false, false
+	for n := 0; n < maxV6Bridges; n++ {
+		want[TProxy6PortBase+n] = false
+	}
+	for slot := 0; slot < MaxQoSClasses; slot++ {
+		tp, rp := QoSClassPorts6(slot)
+		want[tp], want[rp] = false, false
+	}
 	for _, p := range ports {
 		if _, ok := want[p]; !ok {
 			t.Errorf("лишний порт %d", p)
