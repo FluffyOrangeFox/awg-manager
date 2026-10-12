@@ -3,6 +3,9 @@ package router
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -32,7 +35,17 @@ type v6Env struct {
 // WSL), где запись прошла бы по-настоящему, — поэтому для всего тестового
 // бинаря шов по умолчанию пуст; считают вызовы те тесты, которым это нужно
 // (stubV6Env).
-func init() { reserveV6ListenPorts = func() error { return nil } }
+//
+// То же для сноса набора AWGM-BYPASS6: слой сносится в каждом пути выхода из
+// режима (sweepV6), и без этого любой такой тест звал бы ipset хоста.
+func init() {
+	reserveV6ListenPorts = func() error { return nil }
+	dropBypassSet6 = func(context.Context) error { return nil }
+}
+
+// realDropBypassSet6 — боевая реализация, снятая до подмены в init: её
+// проверяет TestDropBypassSet6_RemovesDump.
+var realDropBypassSet6 = dropBypassSet6
 
 func stubV6Env(t *testing.T) *v6Env {
 	t.Helper()
@@ -726,7 +739,7 @@ func TestSweepV6_UnconditionalEvenWithoutTraces(t *testing.T) {
 // v4-остатками — в этом режиме его цепочки не сверяет никто. Свип разовый.
 func TestReconcileFakeIPTun_FirstTickSweepsV6Layer(t *testing.T) {
 	h := newFakeIPEnableHarness(t, "")
-	if err := h.svc.Enable(context.Background()); err != nil {
+	if err := h.svc.enable(context.Background()); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	h.svc.deps.OpkgTunIndices = &recIndices{live: map[int]bool{0: true}}
@@ -765,7 +778,7 @@ func TestPolicyTunDisable_SweepsV6Layer(t *testing.T) {
 	fe := &v6Exec{dump: v6JumpsDump()}
 	h.svc.deps.IPTables = newV6IPTables(fe)
 
-	if err := h.svc.Disable(context.Background()); err != nil {
+	if err := h.svc.disable(context.Background()); err != nil {
 		t.Fatalf("Disable(policy-tun): %v", err)
 	}
 	if fe.cleanups != 1 || env.setDropped != 1 {
@@ -1035,5 +1048,74 @@ func TestReconcileInstalled_V6InstallFailedThenOff_StillUninstalls(t *testing.T)
 	mustReconcile(t, svc, sr)
 	if len(fe.ip6t) != n || fe.cleanups != 1 {
 		t.Errorf("повторный снос не нужен: calls %d → %d, cleanups=%d", n, len(fe.ip6t), fe.cleanups)
+	}
+}
+
+// Удаление пакета (F623) обязано снимать и перехват IPv6: его джампы в
+// ip6tables, правило `ip -6 rule` и набор AWGM-BYPASS6 переживают остановку
+// sing-box так же, как v4-правила, а хук 53 prerm удаляет вместе с остальными
+// — без сноса устройства политики оставались бы без IPv6 до перезагрузки
+// роутера. Набор — только после правил: пока в ядре стоит `--match-set`,
+// ipset его не снесёт.
+func TestReleaseNetfilterForRemoval_SweepsV6Layer(t *testing.T) {
+	stubV6Env(t)
+	fe := &v6Exec{dump: v6JumpsDump()}
+	origTeardown := removalTeardownBypassSet
+	removalTeardownBypassSet = func(*ServiceImpl, context.Context) {}
+	callsAtDrop := -1
+	origDrop := dropBypassSet6
+	dropBypassSet6 = func(context.Context) error { callsAtDrop = len(fe.ip6t); return nil }
+	t.Cleanup(func() { removalTeardownBypassSet, dropBypassSet6 = origTeardown, origDrop })
+
+	ReleaseNetfilterForRemoval(context.Background(), Deps{IPTables: newV6IPTables(fe)})
+
+	if fe.cleanups != 1 || fe.blackholeCleanups != 1 {
+		t.Errorf("файлы правил, хук и блокировка IPv6 обязаны быть сняты: cleanups=%d blackhole=%d", fe.cleanups, fe.blackholeCleanups)
+	}
+	if !hasCall(fe.ip6t, "-t", "mangle", "-D", "PREROUTING", "-i", "br0", "-m", "mark", "--mark", "0xffffaab",
+		"-m", "conntrack", "--ctdir", "ORIGINAL", "-j", Chain6Name) {
+		t.Errorf("джамп перехвата IPv6 не снят: %v", fe.ip6t)
+	}
+	if !hasCall(fe.ip, "-6", "rule", "del", "fwmark", "0x1", "table", "100") {
+		t.Errorf("правило ip -6 rule не снято: %v", fe.ip)
+	}
+	lastChain := -1
+	for i, c := range fe.ip6t {
+		if reflect.DeepEqual(c, []string{"-t", "nat", "-X", Redirect6Chain}) {
+			lastChain = i
+		}
+	}
+	if lastChain < 0 {
+		t.Fatalf("цепочки перехвата IPv6 не удалены: %v", fe.ip6t)
+	}
+	if callsAtDrop <= lastChain {
+		t.Errorf("набор AWGM-BYPASS6 снесён до снятия правил или не снесён (снос после %d вызовов, последняя цепочка — вызов %d)", callsAtDrop, lastChain)
+	}
+}
+
+// Снос набора AWGM-BYPASS6 убирает и его дамп — по нему хук netfilter.d
+// пересоздаёт набор, и оставшийся дамп воскрешал бы его на каждой перестройке
+// файрвола. Порядок «сначала дамп» (как в teardownBypassSet) здесь не
+// проверить без настоящего ipset; проверяем, что дамп удалён и что
+// отсутствующий дамп — не ошибка.
+func TestDropBypassSet6_RemovesDump(t *testing.T) {
+	if bypassset.IPSetBinary() != "" {
+		t.Skip("на хосте есть ipset — боевой снос набора в тесте не зовём")
+	}
+	orig := bypassSave6Path
+	bypassSave6Path = filepath.Join(t.TempDir(), "bypass6.ipset")
+	t.Cleanup(func() { bypassSave6Path = orig })
+	if err := os.WriteFile(bypassSave6Path, []byte("create AWGM-BYPASS6 hash:net family inet6\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := realDropBypassSet6(context.Background()); err != nil {
+		t.Fatalf("снос набора: %v", err)
+	}
+	if _, err := os.Stat(bypassSave6Path); !os.IsNotExist(err) {
+		t.Errorf("дамп набора обязан быть удалён, stat: %v", err)
+	}
+	if err := realDropBypassSet6(context.Background()); err != nil {
+		t.Errorf("повторный снос без дампа не должен быть ошибкой: %v", err)
 	}
 }

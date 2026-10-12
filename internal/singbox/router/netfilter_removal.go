@@ -17,6 +17,11 @@ import (
 // policy-tun в той же цепочке живут классы QoS (Install DSCPOnly). Тот же
 // порядок, что в disable: набор — только после снятия правил с `--match-set`.
 //
+// Перехват IPv6 снимается так же и по той же причине: его джампы в ip6tables,
+// правило `ip -6 rule` и набор AWGM-BYPASS6 остановку sing-box переживают
+// точно так же, а хук 53 prerm удаляет вместе с остальными. Тоже безусловно:
+// на роутере без ip6tables шаги просто не находят, что снимать.
+//
 // ServiceImpl собирается мимо NewService по той же причине, что в
 // ReleasePolicyTunForRemoval: тот переписывает netfilter-хук на диске.
 func ReleaseNetfilterForRemoval(ctx context.Context, d Deps) {
@@ -29,6 +34,8 @@ func ReleaseNetfilterForRemoval(ctx context.Context, d Deps) {
 	}
 	s.deps.IPTables.Uninstall(ctx)
 	removalTeardownBypassSet(s, ctx)
+	// sweepV6 сам держит порядок «правила, потом набор».
+	s.sweepV6(ctx)
 }
 
 // removalTeardownBypassSet — шов теста: без него тест экспортируемой функции

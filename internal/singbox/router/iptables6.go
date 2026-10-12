@@ -540,7 +540,7 @@ func v6BridgesFor(names []string) (bridges []V6Bridge, skipped []string) {
 }
 
 // buildV6Spec собирает желаемый спек v6-правил. Единственное место сборки —
-// по той же причине, что у buildTproxySpec: Enable и reconcile обязаны давать
+// по той же причине, что у buildTproxySpec: enable и reconcile обязаны давать
 // один и тот же спек на одних входах.
 //
 // ingress — уже резолвленные kernel-имена интерфейсов-источников; adhoc —

@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -18,7 +19,7 @@ import (
 // Слой ведомый: он живёт только внутри режима tproxy и только пока тот
 // установлен. Решения «включён ли роутер», «жив ли движок», «какая метка у
 // политики» принимает v4-путь — сюда они приходят готовыми. Отказ слоя не
-// роняет ни Enable, ни Reconcile: IPv4-перехват важнее и должен пережить и
+// роняет ни enable, ни Reconcile: IPv4-перехват важнее и должен пережить и
 // отсутствующий ip6tables, и роутер без IPv6. Причина отказа уходит в журнал.
 
 // v6WantState — что настройки хотят от v6-слоя на этом тике.
@@ -58,13 +59,16 @@ var (
 		}
 		return bypassset.CreateSet6(ctx)
 	}
+	// Дамп — ПЕРВЫМ, как в teardownBypassSet: хук netfilter.d пересоздаёт
+	// набор из дампа, если набора нет, и сработавший между сносом набора и
+	// удалением дампа хук воскресил бы его до перезагрузки.
 	dropBypassSet6 = func(ctx context.Context) error {
 		var err error
-		if bypassset.IPSetBinary() != "" {
-			err = bypassset.DestroySet6(ctx)
-		}
-		if rerr := os.Remove(bypassSave6Path); rerr != nil && !os.IsNotExist(rerr) && err == nil {
+		if rerr := os.Remove(bypassSave6Path); rerr != nil && !os.IsNotExist(rerr) {
 			err = rerr
+		}
+		if bypassset.IPSetBinary() != "" {
+			err = errors.Join(err, bypassset.DestroySet6(ctx))
 		}
 		return err
 	}
@@ -287,7 +291,7 @@ func (s *ServiceImpl) waitForV6Sockets(ctx context.Context, want V6Spec, timeout
 // блокировка снимается. При целых джампах и мёртвом движке ничего не
 // трогается: перехват в мёртвый порт сам роняет трафик.
 //
-// Вызывается только под transitionMu (Enable и reconcileInstalled).
+// Вызывается только под transitionMu (enable и reconcileInstalled).
 func (s *ServiceImpl) syncV6(ctx context.Context, want V6Spec, state v6WantState, engineDown, force, inboundsHealed bool) {
 	it := s.deps.IPTables
 	if state == v6Unknown {
