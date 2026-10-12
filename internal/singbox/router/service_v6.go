@@ -298,13 +298,13 @@ func (s *ServiceImpl) syncV6(ctx context.Context, want V6Spec, state v6WantState
 		return
 	}
 	if state == v6Off {
-		s.teardownV6(ctx, "перехват IPv6 выключен в настройках — правила сняты")
+		s.teardownV6(ctx, "перехват IPv6 выключен в настройках — правила сняты", force)
 		s.v6Clear()
 		return
 	}
 	if !v6HasJumps(want) {
 		// IPv6 на LAN не поднят (или метки нет): ставить нечего.
-		s.teardownV6(ctx, "на LAN-мостах пропал IPv6 — правила перехвата сняты")
+		s.teardownV6(ctx, "на LAN-мостах пропал IPv6 — правила перехвата сняты", force)
 		s.v6Warn("перехват IPv6 включён, но ни на одном LAN-мосту нет IPv6 — правила не ставятся")
 		return
 	}
@@ -432,8 +432,15 @@ func (s *ServiceImpl) engageBlackhole6(ctx context.Context, want V6Spec, st v6St
 // продолжал бы возвращать перехват или блокировку, выключенные в настройках.
 // Без обращений к ip6tables, когда сносить нечего, — это горячий путь каждого
 // тика при "ipv4_only".
-func (s *ServiceImpl) teardownV6(ctx context.Context, reason string) {
-	if s.appliedV6 == nil && s.appliedBlackhole6 == nil && !s.v6KernelUnknown && !v6RulesFilePresent() && !blackhole6FilePresent() {
+//
+// force (первая сверка после старта демона) сносит и без следов: сирота
+// бывает и без файлов — демон умер посреди Uninstall6, который удаляет их
+// первыми, или restore закоммитил часть таблиц, а v6KernelUnknown жил только в
+// памяти. reason пишется в журнал, только если следы были: иначе каждый старт
+// у всех с "ipv4_only" сообщал бы о сносе того, чего не было.
+func (s *ServiceImpl) teardownV6(ctx context.Context, reason string, force bool) {
+	traces := s.appliedV6 != nil || s.appliedBlackhole6 != nil || s.v6KernelUnknown || v6RulesFilePresent() || blackhole6FilePresent()
+	if !traces && !force {
 		return
 	}
 	// Uninstall6 снимает и блокировку.
@@ -445,7 +452,7 @@ func (s *ServiceImpl) teardownV6(ctx context.Context, reason string) {
 	if err := dropBypassSet6(ctx); err != nil {
 		s.appLog.Warn("ipv6", "", "geoip-обход IPv6: снос набора: "+err.Error())
 	}
-	if reason != "" {
+	if traces && reason != "" {
 		s.appLog.Info("ipv6", "", reason)
 	}
 }
@@ -454,33 +461,26 @@ func (s *ServiceImpl) teardownV6(ctx context.Context, reason string) {
 // (fakeip-tun, policy-tun) и где v4-остатки прежнего режима снимает такой же
 // безусловный Uninstall: слой живёт только в tproxy, но его цепочки, хук и
 // файлы правил переживают и рестарт демона, и аварийную смену режима, а в
-// чужом режиме их никто не сверяет. teardownV6 здесь не годится: он судит по
-// снимкам в памяти и файлам правил, а сирота без файла (демон умер посреди
-// Uninstall6) так и осталась бы заворачивать IPv6 в порт без слушателя.
+// чужом режиме их никто не сверяет. Снос с force: по одним снимкам в памяти и
+// файлам правил сирота без файла (демон умер посреди Uninstall6) так и
+// осталась бы заворачивать IPv6 в порт без слушателя.
 //
 // Вызывается под transitionMu, как и остальные правки состояния слоя.
 func (s *ServiceImpl) sweepV6(ctx context.Context) {
-	s.deps.IPTables.Uninstall6(ctx)
-	s.appliedV6 = nil
-	s.appliedBlackhole6 = nil
-	s.v6KernelUnknown = false
-	// Только после Uninstall6: пока правило `--match-set` в ядре, набор занят.
-	if err := dropBypassSet6(ctx); err != nil {
-		s.appLog.Warn("ipv6", "", "geoip-обход IPv6: снос набора: "+err.Error())
-	}
+	s.teardownV6(ctx, "", true)
 	s.v6Clear()
 }
 
 // bypassSet6Wanted — нужен ли IPv6-набор обхода по текущим настройкам. Читает
 // настройки заново: наполнение идёт асинхронно и минуты, семейство за это
 // время могли переключить.
-func (s *ServiceImpl) bypassSet6Wanted() bool {
+func (s *ServiceImpl) bypassSet6Wanted() (bool, error) {
 	if s.deps.Settings == nil {
-		return false
+		return false, nil
 	}
 	st, err := s.deps.Settings.Get()
-	if err != nil || st == nil {
-		return false
+	if err != nil {
+		return false, err
 	}
-	return familyHasV6(st.SingboxRouter.InterceptFamily)
+	return familyHasV6(st.SingboxRouter.InterceptFamily), nil
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hoaxisr/awg-manager/internal/logging"
 	"github.com/hoaxisr/awg-manager/internal/singbox/router/bypassset"
 	"github.com/hoaxisr/awg-manager/internal/storage"
 )
@@ -227,6 +228,26 @@ func TestReconcileInstalled_V6Off_NoIP6TablesCalls(t *testing.T) {
 	if calls != 0 || len(fe.ip6t) != 0 || len(fe.restores) != 0 || fe.cleanups != 0 {
 		t.Errorf("выключенный слой не должен трогать ip6tables: out=%d, run=%d, restore=%d, cleanup=%d",
 			calls, len(fe.ip6t), len(fe.restores), fe.cleanups)
+	}
+}
+
+// Сирота без следов: демон умер посреди Uninstall6 (файлы правил он удаляет
+// первыми) или restore закоммитил часть таблиц, а признак неизвестного
+// состояния жил только в памяти. После рестарта ни снимков, ни файлов — первая
+// сверка обязана снести слой безусловно, как sweepV6 в чужих режимах.
+func TestReconcileInstalled_V6Off_FirstTickSweepsTracelessOrphan(t *testing.T) {
+	svc, fe, env, sr := newV6ReconcileService(t, FamilyIPv4Only)
+	svc.netfilterStateKnown = false
+	fe.dump = v6JumpsDump()
+	mustReconcile(t, svc, sr)
+	if fe.cleanups != 1 || env.setDropped != 1 || !hasCall(fe.ip6t, "-t", "mangle", "-X", Chain6Name) {
+		t.Fatalf("тик 1: сирота обязана быть снесена: cleanups=%d dropped=%d calls=%v", fe.cleanups, env.setDropped, fe.ip6t)
+	}
+
+	n := len(fe.ip6t)
+	mustReconcile(t, svc, sr)
+	if len(fe.ip6t) != n || fe.cleanups != 1 {
+		t.Errorf("тик 2: свип обязан быть разовым: calls %d → %d, cleanups=%d", n, len(fe.ip6t), fe.cleanups)
 	}
 }
 
@@ -1090,6 +1111,46 @@ func TestReleaseNetfilterForRemoval_SweepsV6Layer(t *testing.T) {
 	}
 	if callsAtDrop <= lastChain {
 		t.Errorf("набор AWGM-BYPASS6 снесён до снятия правил или не снесён (снос после %d вызовов, последняя цепочка — вызов %d)", callsAtDrop, lastChain)
+	}
+}
+
+// Отказ сноса набора AWGM-BYPASS6 при удалении пакета обязан остаться в
+// журнале, как у v4-набора: иначе сирота набора не видна никому.
+func TestReleaseNetfilterForRemoval_V6SetDropError_Logged(t *testing.T) {
+	stubV6Env(t)
+	fe := &v6Exec{}
+	origTeardown, origDrop := removalTeardownBypassSet, dropBypassSet6
+	removalTeardownBypassSet = func(*ServiceImpl, context.Context) {}
+	dropBypassSet6 = func(context.Context) error { return errors.New("ipset: set in use") }
+	t.Cleanup(func() { removalTeardownBypassSet, dropBypassSet6 = origTeardown, origDrop })
+	rec := &recordingAppLogger{}
+
+	ReleaseNetfilterForRemoval(context.Background(), Deps{IPTables: newV6IPTables(fe), AppLog: rec})
+
+	if !strings.Contains(strings.Join(rec.entries, "\n"), "set in use") {
+		t.Errorf("ошибка сноса набора AWGM-BYPASS6 не попала в журнал: %v", rec.entries)
+	}
+}
+
+// Настройки не прочитались — наполнение IPv6-половины пропущено, и причина
+// обязана быть в журнале, а не проглочена: иначе набор молча пуст.
+func TestRunBypassPopulate_V6SettingsReadError_Logged(t *testing.T) {
+	dir := t.TempDir()
+	// settings.json — каталог: чтение падает и под root.
+	if err := os.Mkdir(filepath.Join(dir, "settings.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec := &recordingAppLogger{}
+	svc := newTestService(t, Deps{AppLog: rec, Settings: storage.NewSettingsStore(dir)})
+	svc.appLog = logging.NewScopedLogger(rec, logging.GroupRouting, logging.SubSingboxRouter)
+	svc.populateBypassSet = func(context.Context, []string) (bypassset.PopulateResult, error) {
+		return bypassset.PopulateResult{}, nil
+	}
+
+	svc.runBypassPopulate([]string{"ru"})
+
+	if !strings.Contains(strings.Join(rec.entries, "\n"), "is a directory") {
+		t.Errorf("ошибка чтения настроек не попала в журнал: %v", rec.entries)
 	}
 }
 

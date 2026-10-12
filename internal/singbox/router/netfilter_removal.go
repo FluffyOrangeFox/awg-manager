@@ -29,7 +29,9 @@ func ReleaseNetfilterForRemoval(ctx context.Context, d Deps) {
 		d.IPTables = NewIPTables()
 	}
 	s := &ServiceImpl{
-		deps:      d,
+		deps: d,
+		// appLog — для sweepV6: без него отказ сноса AWGM-BYPASS6 терялся бы молча.
+		appLog:    logging.NewScopedLogger(d.AppLog, logging.GroupRouting, logging.SubSingboxRouter),
 		bypassLog: logging.NewScopedLogger(d.AppLog, logging.GroupRouting, logging.SubBypassSet),
 	}
 	s.deps.IPTables.Uninstall(ctx)

@@ -78,9 +78,11 @@
   let policyTunMode = $derived(targetMode === 'policy-tun');
   // Перехват IPv6 есть только в TPROXY и только при семействе с IPv6. От него
   // зависит, принимаются ли IPv6-подсети в исключениях (бэкенд без него их
-  // отвергает).
+  // отвергает). Режим — сохранённый, как у бэкенда (v6LayerActive), а не
+  // targetMode: тот при fakeip-tun или выборе в сессии говорит tproxy.
   let v6Intercept = $derived(
-    !policyTunMode && (cfg?.interceptFamily === 'both' || cfg?.interceptFamily === 'ipv6_only'),
+    (!cfg?.routingMode || cfg.routingMode === 'tproxy') &&
+      (cfg?.interceptFamily === 'both' || cfg?.interceptFamily === 'ipv6_only'),
   );
   // KeeneticOS 4.x не знает интерфейсов OpkgTun — policy-tun там не поднять.
   let tunSupported = $derived(opkgTunSupported($systemInfo.data));

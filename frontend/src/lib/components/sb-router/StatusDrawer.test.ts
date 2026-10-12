@@ -246,6 +246,16 @@ describe('Исключения по подсетям: IPv6 только при �
 		expect(patchSpy).not.toHaveBeenCalled();
 	});
 
+	// Дровер управляет только tproxy и policy-tun, и при сохранённом fakeip-tun
+	// его целевой режим — tproxy. Бэкенд судит по сохранённому режиму: v6-слоя
+	// в fakeip-tun нет, подсеть он отвергнет.
+	it('fakeip-tun: IPv6-подсеть не принимается даже при сохранённом «IPv4 и IPv6»', async () => {
+		settings.set({ routingMode: 'fakeip-tun', deviceMode: 'policy', policyName: 'p1', interceptFamily: 'both' });
+		render(StatusDrawer);
+		await typeSubnet('2001:db8::/48');
+		expect(patchSpy).not.toHaveBeenCalled();
+	});
+
 	it('оставшаяся IPv6-подсеть при выключенном перехвате видна и помечена недействующей', () => {
 		settings.set({
 			routingMode: 'tproxy',
