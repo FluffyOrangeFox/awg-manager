@@ -25,6 +25,12 @@ var ifaceUp = func(name string) bool {
 	return err == nil && ifi.Flags&net.FlagUp != 0
 }
 
+// deviceExists — шов над проверкой /sys/class/net/<имя>.
+var deviceExists = func(name string) bool {
+	_, err := os.Stat("/sys/class/net/" + name)
+	return err == nil
+}
+
 // wgClient is the subset of wg.Client needed by the health sensor.
 type wgClient interface {
 	Show(ctx context.Context, iface string) (*wg.ShowResult, error)
@@ -453,11 +459,35 @@ func (s *Service) StartMonitoringAllRunning() {
 		}
 		// Fast sysfs check — tunnel is running if its interface exists
 		ifaceName := s.resolveIfaceName(t.ID)
-		if _, err := os.Stat(fmt.Sprintf("/sys/class/net/%s", ifaceName)); err != nil {
+		if !deviceExists(ifaceName) {
+			continue
+		}
+		// Устройства мало: OpkgTunN на OS5 создаёт NDMS из своего конфига
+		// независимо от нашего старта. Упавший на буте старт оставлял
+		// opkgtunN без пира, и монитор «лечил» его link toggle-ем в вечном
+		// backoff (F626). Наш туннель — тот, где awg видит пир. wdtt-raw —
+		// не wg-устройство, ему проверка не применима.
+		if t.Backend != "wdtt-raw" && !s.hasPeer(ifaceName) {
 			continue
 		}
 		s.StartMonitoring(t.ID, t.Name)
 	}
+}
+
+// hasPeer — применён ли к устройству наш конфиг. Ошибка awg show (не
+// wg-устройство, нет awg) — «нет».
+func (s *Service) hasPeer(ifaceName string) bool {
+	if s.wg == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := s.wg.Show(ctx, ifaceName)
+	if err != nil {
+		s.appLog.Debug("pingcheck", ifaceName, "awg show: "+err.Error()+" — монитор не заводим")
+		return false
+	}
+	return res != nil && res.HasPeer
 }
 
 // StopMonitoringAll stops monitoring for all tunnels.

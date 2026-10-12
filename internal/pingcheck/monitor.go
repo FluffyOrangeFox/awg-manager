@@ -29,6 +29,17 @@ var resolveEndpoint = tryResolveEndpoint
 func (s *Service) runMonitorLoop(m *tunnelMonitor) {
 	defer m.wg.Done()
 
+	// Канал снимаем под локом один раз: StopMonitoring закрывает его и
+	// обнуляет поле под s.mu. Чтение поля в select после остановки посреди
+	// тика давало nil — цикл ждал вечно, а wg.Wait останавливающего висел до
+	// отмены s.ctx (F628).
+	s.mu.RLock()
+	stopCh := m.stopCh
+	s.mu.RUnlock()
+	if stopCh == nil {
+		return
+	}
+
 	config := s.getCheckConfig(m.tunnelID)
 	if config == nil {
 		return
@@ -54,7 +65,7 @@ func (s *Service) runMonitorLoop(m *tunnelMonitor) {
 			m.failThreshold = config.FailThreshold
 			s.lockedTick(m, config)
 
-		case <-m.stopCh:
+		case <-stopCh:
 			return
 		case <-s.ctx.Done():
 			return

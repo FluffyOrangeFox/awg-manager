@@ -156,6 +156,11 @@ type Orchestrator struct {
 	// onTunnelRunning is an optional callback on confirmed running
 	// transition. Nil-safe.
 	onTunnelRunning func(tunnelID string)
+
+	// startRetry (под o.mu) — туннели с живой цепочкой повтора старта
+	// (start_retry.go): одна цепочка на туннель, хотя бут и WAN-up могут
+	// упасть на нём оба.
+	startRetry map[string]bool
 }
 
 // New creates a new Orchestrator.
@@ -1043,10 +1048,14 @@ func (o *Orchestrator) executeGroup(ctx context.Context, group []Action, owner s
 	// (logged via firstErr) instead of stalling the whole boot/reconnect
 	// sweep behind one dead endpoint.
 	if err := o.lockTunnel(ctx, tid, owner); err != nil {
+		// Старт не исполнялся вовсе — тот же «никто не повторил», что F625.
+		o.maybeStartRetry(group)
 		return err
 	}
 	defer o.unlockTunnel(tid)
-	return o.executeActions(ctx, group)
+	err := o.executeActions(ctx, group)
+	o.maybeStartRetry(group)
+	return err
 }
 
 // executeOne is implemented in execute.go.
